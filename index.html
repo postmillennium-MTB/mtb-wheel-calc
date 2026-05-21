@@ -17,12 +17,9 @@
 </head>
 <body class="bg-[#060d18] text-[#e2e8f0]">
 
-    <!-- The HTML element where your React app lives -->
     <div id="root"></div>
 
-    <!-- Combined Logic and Interface script -->
     <script type="text/babel">
-        // Extract hooks and chart components from global browser window objects
         const { useState, useMemo } = React;
         const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } = Recharts;
 
@@ -36,13 +33,13 @@
 
         // ── PHYSICS ENGINE ────────────────────────────────────────────────────────────
         function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes }) {
-          const EA   = 210e9 * Math.PI * 1e-6;          // 2.0 mm spoke
+          const EA   = 210e9 * Math.PI * 1e-6;          
           const Ns   = Math.floor(n_spokes / 2);
-          const R_E  = erd_mm / 2 / 1000;               // ERD radius (m)
-          const R    = 0.311;                            // shear-centre radius (m)
+          const R_E  = erd_mm / 2 / 1000;               
+          const R    = 0.311;                            
           const EIL  = 50, EIR = 150, GJ = 40;
           const coeff = Math.PI / Math.pow(R, 3);
-          const cos_x = Math.cos(4 * Math.PI * 3 / Ns); // 3-cross
+          const cos_x = Math.cos(4 * Math.PI * 3 / Ns); 
 
           const T    = t_ds * 9.81;
           const Rfa  = pcd_ds  / 2 / 1000;
@@ -74,10 +71,9 @@
             Cl += 1 / (Ksl + coeff * (EIL * (q-1)**2 + GJ * (q-1)));
             Cr += 1 / (Ksr + coeff * EIR * (q-1)**2);
           }
-          const Kl = 1 / Cl / 1000;   // N/mm
+          const Kl = 1 / Cl / 1000;   
           const Kr = 1 / Cr / 1000;
 
-          // Weak side = smallest tension
           const Flat = Tnds * Kl * 1e3 / (EA * sb / Lb);
           const Frad = Tnds * Kr * 1e3 / (EA / Lb);
 
@@ -136,7 +132,6 @@
           const lx  = OLD ? CX - (OLD/2)*SC : nx - 10;
           const gid = `g${Math.random().toString(36).slice(2,7)}`;
 
-          // Visual indicator for offset rim center line relative to symmetrical hub center
           const rimVisualX = isOffset ? (type === 'rear' ? CX - 3*SC : CX + 3*SC) : CX;
 
           return (
@@ -154,13 +149,11 @@
                 </linearGradient>
               </defs>
 
-              {/* Spoke lines converging to rim bed center */}
               <line x1={dx} y1={AY - pcd_ds*SC*0.18}  x2={rimVisualX} y2={compact?5:8} stroke="#f59e0b" strokeWidth={0.8} opacity={0.3}/>
               <line x1={nx} y1={AY - pcd_nds*SC*0.18} x2={rimVisualX} y2={compact?5:8} stroke="#3b82f6" strokeWidth={0.8} opacity={0.3}/>
               <circle cx={rimVisualX} cy={compact?5:8} r={3} fill="none" stroke="#1e3050" strokeWidth={1}/>
               {!compact && <text x={rimVisualX+8} y={12} fill="#1e3050" fontSize={7} fontFamily="monospace">{isOffset ? 'RIM (OFFSET)' : 'RIM'}</text>}
 
-              {/* OLD bracket */}
               {OLD && <>
                 <line x1={lx} y1={AY-FH-10} x2={rx} y2={AY-FH-10} stroke="#1e3050" strokeWidth={1}/>
                 <line x1={lx} y1={AY-FH-13} x2={lx} y2={AY-FH-7}  stroke="#1e3050" strokeWidth={1}/>
@@ -168,28 +161,20 @@
                 <text x={CX} y={AY-FH-12} textAnchor="middle" fill="#2d4a6a" fontSize={compact?7:8} fontFamily="monospace">OLD {OLD}mm</text>
               </>}
 
-              {/* Axle */}
               <line x1={lx-5} y1={AY} x2={rx+5} y2={AY} stroke="#1e3050" strokeWidth={2}/>
-              {/* Hub body */}
               <rect x={nx} y={AY-5} width={Math.max(dx-nx,1)} height={10} fill="#0a1620" stroke="#1e3050" strokeWidth={1}/>
-              {/* End caps */}
               <rect x={lx-6} y={AY-14} width={6} height={28} fill="#142030" rx={1}/>
               <rect x={rx}   y={AY-14} width={6} height={28} fill="#142030" rx={1}/>
-              {/* NDS flange */}
               <rect x={nx-4} y={AY-FH} width={8} height={FH*2} fill={`url(#${gid}b)`} rx={1}/>
-              {/* DS flange */}
               <rect x={dx-4} y={AY-FH} width={8} height={FH*2} fill={`url(#${gid}a)`} rx={1}/>
 
-              {/* PCD labels */}
               {!compact && <>
                 <text x={nx} y={AY-FH-4} textAnchor="middle" fill="#60a5fa" fontSize={7} fontFamily="monospace">⌀{pcd_nds}</text>
                 <text x={dx} y={AY-FH-4} textAnchor="middle" fill="#fbbf24" fontSize={7} fontFamily="monospace">⌀{pcd_ds}</text>
               </>}
 
-              {/* Symmetrical Hub Centre Line */}
               <line x1={CX} y1={AY-FH} x2={CX} y2={AY+FH+18} stroke="#1e3050" strokeWidth={1} strokeDasharray="3,2"/>
 
-              {/* Dimension labels relative to Rim Centerline plane */}
               <line x1={nx} y1={AY+FH+5} x2={rimVisualX} y2={AY+FH+5} stroke="#3b82f6" strokeWidth={1}/>
               <line x1={nx} y1={AY+FH+2} x2={nx} y2={AY+FH+8} stroke="#3b82f6" strokeWidth={1}/>
               <line x1={rimVisualX} y1={AY+FH+2} x2={rimVisualX} y2={AY+FH+8} stroke="#3b82f6" strokeWidth={1}/>
@@ -229,11 +214,11 @@
             <div style={{marginBottom:10}}>
               <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
                 <span style={{fontFamily:'monospace',fontSize:10,color:'#5a80a0'}}>{label}</span>
-                <span style={{fontFamily:'monospace',fontSize:11,color,fontWeight:'bold'}}>{value}{unit}</span>
+                <span style={{fontFamily:'monospace',fontSize:11,color:color,fontWeight:'bold'}}>{value}{unit}</span>
               </div>
               <input type="range" min={min} max={max} step={step} value={value}
                 onChange={e => onChange(+e.target.value)}
-                style={{width:'100%',cursor:'pointer'}}/>
+                style={{width:'100%',cursor:'pointer',accentColor:color}}/>
               <div style={{display:'flex',justifyContent:'space-between',fontSize:8,color:'#2d4a6a',marginTop:1}}>
                 <span>{min}{unit}</span><span>{max}{unit}</span>
               </div>
@@ -246,9 +231,9 @@
           return (
             <div style={{background:'#0a1620',border:`1px solid ${color}33`,borderRadius:3,padding:'10px 14px',textAlign:'center'}}>
               <div style={{fontFamily:'monospace',fontSize:8,color:'#2d4a6a',letterSpacing:1,marginBottom:4}}>{label}</div>
-              <div style={{fontFamily:'monospace',fontSize:20,color,fontWeight:'300',lineHeight:1}}>{value}</div>
+              <div style={{fontFamily:'monospace',fontSize:20,color:color,fontWeight:'300',lineHeight:1}}>{value}</div>
               <div style={{fontFamily:'monospace',fontSize:9,color:'#2d4a6a',marginTop:2}}>{unit}</div>
-              {sub && <div style={{fontFamily:'monospace',fontSize:8,color,marginTop:4,opacity:0.7}}>{sub}</div>}
+              {sub && <div style={{fontFamily:'monospace',fontSize:8,color:color,marginTop:4,opacity:0.7}}>{sub}</div>}
             </div>
           );
         }
@@ -269,39 +254,28 @@
 
           const erd = WHEELS_SIZES_LOCAL[wheelKey].erd;
 
-          // Resolve baseline values depending on preset vs custom selection
           const activeBaseHub = custom
             ? { d_ds: dDS, d_nds: dNDS, pcd_ds: pcdDS, pcd_nds: pcdNDS, OLD: null, type: 'rear', name: 'Custom Hub' }
             : { ...PRESETS.find(p => p.id === presetId) };
 
-          // Helper to adjust flange offsets dynamically according to 3mm asymmetric rim bed shift
           const getAdjustedFlanges = (hub) => {
             if (!offsetRim) return { d_ds_adj: hub.d_ds, d_nds_adj: hub.d_nds };
             
             if (hub.type === 'rear') {
-              return {
-                d_ds_adj: hub.d_ds + 3.0,
-                d_nds_adj: hub.d_nds - 3.0
-              };
+              return { d_ds_adj: hub.d_ds + 3.0, d_nds_adj: hub.d_nds - 3.0 };
             } else {
-              // Front Hubs: high-tension side is left/disc (NDS). Offset rim pulls toward right/non-disc (DS).
-              return {
-                d_ds_adj: hub.d_ds - 3.0,
-                d_nds_adj: hub.d_nds + 3.0
-              };
+              return { d_ds_adj: hub.d_ds - 3.0, d_nds_adj: hub.d_nds + 3.0 };
             }
           };
 
           const { d_ds_adj, d_nds_adj } = getAdjustedFlanges(activeBaseHub);
 
-          // Compute live performance vectors for current selection
           const m = useMemo(() => calcWheel({
             d_ds:  d_ds_adj,  d_nds: d_nds_adj,
             pcd_ds:activeBaseHub.pcd_ds, pcd_nds:activeBaseHub.pcd_nds,
             erd_mm:erd, t_ds:tDS, n_spokes:nSpokes
           }), [d_ds_adj, d_nds_adj, activeBaseHub.pcd_ds, activeBaseHub.pcd_nds, erd, tDS, nSpokes]);
 
-          // Map all presets through the translation array for simultaneous graphics comparison
           const chartData = useMemo(() => {
             const allM = PRESETS.map(p => {
               const adjusted = offsetRim 
@@ -349,7 +323,6 @@
 
           return (
             <div style={{background:BG,minHeight:'100vh',fontFamily:'monospace',color:'#e2e8f0',fontSize:12}}>
-              {/* HEADER */}
               <div style={{background:'linear-gradient(180deg,#0b1e36,#060d18)',borderBottom:`1px solid ${BDR}`,padding:'18px 24px 14px'}}>
                 <div style={{fontSize:9,color:'#3b82f6',letterSpacing:4,textTransform:'uppercase',marginBottom:4}}>
                   Chris King MTB Hubs · Wheel Engineering Analysis · Mode Matrix Model (Ford 2018)
@@ -362,7 +335,6 @@
                 </p>
               </div>
 
-              {/* CONTROLS PANEL */}
               <div style={{background:'#080f1a',borderBottom:`1px solid ${BDR}`,padding:'14px 24px'}}>
                 <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))',gap:'16px 24px',alignItems:'start'}}>
                   <div>
@@ -407,7 +379,6 @@
                     </div>
                   </div>
 
-                  {/* ASYMMETRIC RIM COUPLER BUTTON */}
                   <div>
                     <div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:6}}>RIM BED CONFIG</div>
                     <button onClick={() => setOffsetRim(!offsetRim)} style={{
@@ -453,7 +424,6 @@
                 </div>
               </div>
 
-              {/* TABS */}
               <div style={{display:'flex',borderBottom:`1px solid ${BDR}`,background:'#080f1a'}}>
                 {tabBtn('geo',      '01  Geometry')}
                 {tabBtn('tension',  '02  Tension')}
@@ -462,14 +432,13 @@
               </div>
 
               <div style={{maxWidth:1280,margin:'0 auto',padding:'20px 24px 48px'}}>
-                {/* TAB 1: GEOMETRY */}
                 {tab==='geo' && (
                   <div>
                     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))',gap:20,marginBottom:20}}>
                       <div style={{background:CARD,border:`1px solid ${BDR}`,borderRadius:3,padding:16}}>
                         <div style={{fontSize:9,color:'#3b82f6',letterSpacing:2,marginBottom:8}}>ACTIVE HUB — LIVE GEOMETRY</div>
                         <div style={{fontFamily:'monospace',fontSize:11,color:'#5a80a0',marginBottom:12}}>
-                          {activeBaseHub.name} {offsetRim ? '(Calculated with 3mm Asymmetric Offset Rim)' : ''}
+                          {activeBaseHub.name} {offsetRim ? '(Calculated with 3mm Asymmetric Offset)' : ''}
                         </div>
                         <CrossSection d_ds={d_ds_adj} d_nds={d_nds_adj}
                           pcd_ds={activeBaseHub.pcd_ds} pcd_nds={activeBaseHub.pcd_nds}
@@ -533,7 +502,6 @@
                   </div>
                 )}
 
-                {/* TAB 2: TENSION */}
                 {tab==='tension' && (
                   <div>
                     <div style={{background:CARD,border:`1px solid ${BDR}`,padding:'16px 20px',borderRadius:3,marginBottom:16}}>
@@ -558,11 +526,10 @@
                   </div>
                 )}
 
-                {/* TAB 3: STRENGTH */}
                 {tab==='strength' && (
                   <div>
                     <div style={{background:CARD,border:`1px solid ${BDR}`,padding:'14px 18px',borderRadius:3,marginBottom:16}}>
-                      <div style={{fontSize:9,color|GRN,letterSpacing:2,marginBottom:10}}>ACTIVE GEOMETRY PERFORMANCE MATRICES</div>
+                      <div style={{fontSize:9,color:GRN,letterSpacing:2,marginBottom:10}}>ACTIVE GEOMETRY PERFORMANCE MATRICES</div>
                       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10}}>
                         <MetricCard label="LATERAL STRENGTH" value={m.F_lat_kgf} unit="kgf"  color="#f59e0b" sub="Sideways deflection limit"/>
                         <MetricCard label="RADIAL STRENGTH"  value={m.F_rad_kgf} unit="kgf"  color="#a78bfa" sub="Vertical crushing limit"/>
@@ -605,7 +572,6 @@
                   </div>
                 )}
 
-                {/* TAB 4: DATA TABLE */}
                 {tab==='table' && (
                   <div style={{overflowX:'auto',background:CARD,border:`1px solid ${BDR}`,padding:12,borderRadius:3}}>
                     <table style={{width:'100%',borderCollapse:'collapse',fontSize:10,textAlign:'left'}}>
@@ -641,7 +607,6 @@
           );
         }
 
-        // Render everything to the screen
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<HubAnalysis />);
     </script>
