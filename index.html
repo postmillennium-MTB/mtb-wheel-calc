@@ -9,7 +9,7 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
     <!-- Load Babel to compile JSX in the browser -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Load Recharts Dependencies (Prop-Types and Recharts itself) -->
+    <!-- Load Recharts Dependencies -->
     <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
     <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
     <!-- Load Tailwind CSS v4 -->
@@ -31,63 +31,112 @@
         };
         const WHEELS_SIZES_LOCAL = WHEEL_SIZES;
 
-        // ── PHYSICS ENGINE ────────────────────────────────────────────────────────────
+        // ── RIGOROUS PHYSICS ENGINE (Based on Ford's structural models) ───────────────
         function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes }) {
-          const EA   = 210e9 * Math.PI * 1e-6;          
-          const Ns   = Math.floor(n_spokes / 2);
-          const R_E  = erd_mm / 2 / 1000;               
-          const R    = 0.311;                            
-          const EIL  = 50, EIR = 150, GJ = 40;
-          const coeff = Math.PI / Math.pow(R, 3);
-          const cos_x = Math.cos(4 * Math.PI * 3 / Ns); 
+          
+          // 1. Explicit Material & Spoke Constants (SI Units)
+          const E_spoke = 210e9; // Pa, Steel
+          const d_spoke = 2.0e-3; // 2.0mm diameter
+          const A_spoke = Math.PI * Math.pow(d_spoke / 2, 2);
+          const EA = E_spoke * A_spoke; // Spoke axial stiffness (N)
+          
+          // 2. Explicit Rim Properties (Typical Alloy Rim e.g. DT Swiss TK540)
+          const E_rim = 69e9; // Pa, Aluminum
+          const G_rim = 26e9; // Pa, Aluminum shear modulus
+          const I_lat = 7e-10;  // m^4, lateral moment of inertia
+          const I_rad = 22e-10; // m^4, radial moment of inertia
+          const J_tor = 15e-10; // m^4, torsional constant
+          
+          const EI_lat = E_rim * I_lat;
+          const EI_rad = E_rim * I_rad;
+          const GJ     = G_rim * J_tor;
 
-          const T    = t_ds * 9.81;
-          const Rfa  = pcd_ds  / 2 / 1000;
-          const Rfb  = pcd_nds / 2 / 1000;
-          const da   = d_ds  / 1000;
-          const db   = d_nds / 1000;
+          // 3. Derived Geometry Variables
+          const R = erd_mm / 2 / 1000; // Rim radius (m) derived directly from ERD
+          const n_cross = 3; 
+          const theta_cross = (n_cross * 4 * Math.PI) / n_spokes; // Angle offset from hub to rim
+          const N_sides = n_spokes / 2;
 
-          const r2a  = R_E**2 + Rfa**2 - 2*R_E*Rfa*cos_x;
-          const r2b  = R_E**2 + Rfb**2 - 2*R_E*Rfb*cos_x;
-          const La   = Math.sqrt(da**2 + r2a);
-          const Lb   = Math.sqrt(db**2 + r2b);
-          const sa   = da / La,  sb = db / Lb;
+          // Hub inputs to meters
+          const width_ds = d_ds / 1000;
+          const width_nds = d_nds / 1000;
+          const r_hub_ds = pcd_ds / 2 / 1000;
+          const r_hub_nds = pcd_nds / 2 / 1000;
 
-          const ratio = sa / sb;
-          const Tnds  = T * ratio;
+          // Explicit 3D spoke vectors
+          const L2_ds = width_ds**2 + R**2 + r_hub_ds**2 - 2 * R * r_hub_ds * Math.cos(theta_cross);
+          const L2_nds = width_nds**2 + R**2 + r_hub_nds**2 - 2 * R * r_hub_nds * Math.cos(theta_cross);
+          const L_ds = Math.sqrt(L2_ds);
+          const L_nds = Math.sqrt(L2_nds);
 
-          const Ka   = EA / La,  Kb = EA / Lb;
-          const kla  = T    / La + Ka * sa**2;
-          const klb  = Tnds / Lb + Kb * sb**2;
-          const kra  = T    / La + Ka * (r2a / (da**2 + r2a));
-          const krb  = Tnds / Lb + Kb * (r2b / (db**2 + r2b));
+          // Bracing angles (sin_beta = width / L)
+          const sin_ds = width_ds / L_ds;
+          const sin_nds = width_nds / L_nds;
+          
+          // Tension Balance (T_ds * sin_ds = T_nds * sin_nds)
+          const ratio = sin_ds / sin_nds;
+          const T_ds_N = t_ds * 9.81; 
+          const T_nds_N = T_ds_N * ratio;
 
-          const Ksl  = (Ns / 2) * (kla + klb);
-          const Ksr  = (Ns / 2) * (kra + krb);
-          let   Cl   = 1 / (2 * Ksl),  Cr = 1 / (2 * Ksr);
+          // 4. Elastic Foundation Stiffness (Continuous Ring Model)
+          // Spoke axial stiffness k = EA/L
+          const k_axial_ds = EA / L_ds;
+          const k_axial_nds = EA / L_nds;
 
-          for (let m = 1; m <= Ns; m++) {
-            const q = m * m;
-            Cl += 1 / (Ksl + coeff * (EIL * (q-1)**2 + GJ * (q-1)));
-            Cr += 1 / (Ksr + coeff * EIR * (q-1)**2);
+          // Geometric + elastic lateral stiffness foundation contributions
+          const k_lat_ds = (T_ds_N / L_ds) + k_axial_ds * Math.pow(sin_ds, 2);
+          const k_lat_nds = (T_nds_N / L_nds) + k_axial_nds * Math.pow(sin_nds, 2);
+          
+          const cos2_ds = (L2_ds - width_ds**2) / L2_ds; 
+          const cos2_nds = (L2_nds - width_nds**2) / L2_nds;
+          const k_rad_ds = (T_ds_N / L_ds) + k_axial_ds * cos2_ds;
+          const k_rad_nds = (T_nds_N / L_nds) + k_axial_nds * cos2_nds;
+
+          const K_foundation_lat = (N_sides / 2) * (k_lat_ds + k_lat_nds); 
+          const K_foundation_rad = (N_sides / 2) * (k_rad_ds + k_rad_nds);
+
+          // 5. Modal Summation (Fourier Series for Rim Deflection)
+          const N_max = Math.floor(n_spokes / 2); // Nyquist limit for harmonic modes
+          const coeff = Math.PI / Math.pow(R, 3); // Normalization for ring bending
+
+          let compliance_lat = 1 / (2 * K_foundation_lat); // n=0 rigid body lateral mode
+          let compliance_rad = 1 / (2 * K_foundation_rad); // n=0 rigid body radial mode
+
+          for (let n = 1; n <= N_max; n++) {
+            const n2 = n * n;
+            // Lateral modes involve lateral bending and torsion
+            const mode_stiff_lat = coeff * (EI_lat * Math.pow(n2 - 1, 2) + GJ * (n2 - 1));
+            compliance_lat += 1 / (K_foundation_lat + mode_stiff_lat);
+
+            // Radial modes involve only radial bending
+            const mode_stiff_rad = coeff * EI_rad * Math.pow(n2 - 1, 2);
+            compliance_rad += 1 / (K_foundation_rad + mode_stiff_rad);
           }
-          const Kl = 1 / Cl / 1000;   
-          const Kr = 1 / Cr / 1000;
 
-          const Flat = Tnds * Kl * 1e3 / (EA * sb / Lb);
-          const Frad = Tnds * Kr * 1e3 / (EA / Lb);
+          const K_wheel_lat = (1 / compliance_lat); // Total wheel stiffness N/m
+          const K_wheel_rad = (1 / compliance_rad); 
+
+          // 6. Strength & Buckling Approximations (Defensible Limits)
+          // F_rad limit: Force required to completely detension the weakest spoke (NDS) due to hub displacement.
+          // Tension drop = (Force / Total Wheel Stiffness) * Local Spoke Axial Radial Stiffness
+          const local_rad_nds = k_axial_nds * cos2_nds; 
+          const Frad_N = T_nds_N * K_wheel_rad / local_rad_nds;
+
+          // F_lat limit: Lateral force required to detension NDS spoke.
+          const local_lat_nds = k_axial_nds * sin_nds; 
+          const Flat_N = T_nds_N * K_wheel_lat / local_lat_nds;
 
           return {
             ratio_pct : +(ratio * 100).toFixed(1),
-            t_nds     : +(Tnds / 9.81).toFixed(1),
-            beta_ds   : +(Math.asin(Math.min(sa,0.9999)) * 180 / Math.PI).toFixed(2),
-            beta_nds  : +(Math.asin(Math.min(sb,0.9999)) * 180 / Math.PI).toFixed(2),
-            K_lat     : +Kl.toFixed(1),
-            K_rad     : +Kr.toFixed(0),
-            F_lat_kgf : +(Flat / 9.81).toFixed(1),
-            F_rad_kgf : +(Frad / 9.81).toFixed(1),
-            L_ds_mm   : +(La * 1000).toFixed(1),
-            L_nds_mm  : +(Lb * 1000).toFixed(1),
+            t_nds     : +(T_nds_N / 9.81).toFixed(1),
+            beta_ds   : +(Math.asin(sin_ds) * 180 / Math.PI).toFixed(2),
+            beta_nds  : +(Math.asin(sin_nds) * 180 / Math.PI).toFixed(2),
+            K_lat     : +(K_wheel_lat / 1000).toFixed(1), // Convert to N/mm
+            K_rad     : +(K_wheel_rad / 1000).toFixed(0),
+            F_lat_kgf : +(Flat_N / 9.81).toFixed(1),
+            F_rad_kgf : +(Frad_N / 9.81).toFixed(1),
+            L_ds_mm   : +(L_ds * 1000).toFixed(1),
+            L_nds_mm  : +(L_nds * 1000).toFixed(1),
             ftf       : +(d_ds + d_nds).toFixed(1),
           };
         }
@@ -602,6 +651,12 @@
                     </table>
                   </div>
                 )}
+                
+                <div style={{marginTop:40,borderTop:`1px solid #0d1826`,paddingTop:12,fontSize:8,color:'#3d5a80',lineHeight:2}}>
+                  <strong>Math Model:</strong> Analytical Fourier series derived from Ford (2018) Reinventing the Wheel. <br/>
+                  <strong>Rim Constants:</strong> Alloy Rim Profile (E = 69GPa, I_lat = 7e-10 m^4, I_rad = 22e-10 m^4, J_tor = 15e-10 m^4).<br/>
+                  <strong>Strength Limits:</strong> Lower-bound hub displacement required to detension the lowest-tension spoke.
+                </div>
               </div>
             </div>
           );
