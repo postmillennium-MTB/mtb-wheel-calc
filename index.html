@@ -24,175 +24,109 @@
       '26"':   { erd: 534, label: '26" ISO 559' },
     };
 
-    const SPOKE_DIAMS = [1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2];
+    // ── MATH ENGINE (Ford 2018 Implementation) ───────────────────────────────────
+    function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes }) {
+      // 1. Explicit Material & Spoke Constants (SI Units)
+      const E_spoke = 210e9; 
+      const d_spoke = 2.0e-3; 
+      const A_spoke = Math.PI * Math.pow(d_spoke / 2, 2);
+      const EA = E_spoke * A_spoke; 
+      
+      // 2. Explicit Rim Properties (Using values from user prompt)
+      const E_rim = 69e9; 
+      const G_rim = 26e9; 
+      const I_lat = 1500 * 1e-12; // mm^4 to m^4
+      const I_rad = 3000 * 1e-12; 
+      const J_tor = 500 * 1e-12; 
+      
+      const EI_lat = E_rim * I_lat;
+      const EI_rad = E_rim * I_rad;
+      const GJ     = G_rim * J_tor;
 
-    const mm_to_m = 1e-3;
-    const kgf_to_N = 9.80665;
-    const mm4_to_m4 = 1e-12;
+      // 3. Derived Geometry
+      const R = erd_mm / 2 / 1000; 
+      const n_cross = 3; 
+      const N_sides = n_spokes / 2;
+      const theta_cross = (n_cross * 4 * Math.PI) / n_spokes; 
 
-    function makeWheel({ hub, rim, spokes_ds, spokes_nds }) {
-      return { hub, rim, spokes_ds, spokes_nds };
-    }
+      const width_ds = d_ds / 1000;
+      const width_nds = d_nds / 1000;
+      const r_hub_ds = pcd_ds / 2 / 1000;
+      const r_hub_nds = pcd_nds / 2 / 1000;
 
-    function makeHub({ diameter_mm, width_ds_mm, width_nds_mm }) {
+      const L2_ds = width_ds**2 + R**2 + r_hub_ds**2 - 2 * R * r_hub_ds * Math.cos(theta_cross);
+      const L2_nds = width_nds**2 + R**2 + r_hub_nds**2 - 2 * R * r_hub_nds * Math.cos(theta_cross);
+      const L_ds = Math.sqrt(L2_ds);
+      const L_nds = Math.sqrt(L2_nds);
+
+      const sin_ds = width_ds / L_ds;
+      const sin_nds = width_nds / L_nds;
+      const cos_ds = Math.sqrt(Math.max(0, 1 - Math.pow(sin_ds, 2)));
+      const cos_nds = Math.sqrt(Math.max(0, 1 - Math.pow(sin_nds, 2)));
+      
+      const ratio = sin_ds / sin_nds;
+      const T_ds_N = t_ds * 9.81; 
+      const T_nds_N = T_ds_N * ratio;
+
+      // 4. Elastic Foundation Stiffness
+      const k_axial_ds = EA / L_ds;
+      const k_axial_nds = EA / L_nds;
+
+      const k_lat_ds = (T_ds_N / L_ds) + k_axial_ds * Math.pow(sin_ds, 2);
+      const k_lat_nds = (T_nds_N / L_nds) + k_axial_nds * Math.pow(sin_nds, 2);
+      
+      const k_rad_ds = (T_ds_N / L_ds) + k_axial_ds * Math.pow(cos_ds, 2);
+      const k_rad_nds = (T_nds_N / L_nds) + k_axial_nds * Math.pow(cos_nds, 2);
+
+      // (N_sides / 2) because there are N/2 spokes per side, smeared across the rim
+      const K_foundation_lat = (N_sides / 2) * k_lat_ds + (N_sides / 2) * k_lat_nds; 
+      const K_foundation_rad = (N_sides / 2) * k_rad_ds + (N_sides / 2) * k_rad_nds;
+
+      // 5. Modal Summation (Fourier Series)
+      const N_max = 24; 
+      const coeff = Math.PI / Math.pow(R, 3); 
+
+      let compliance_lat = 1 / (2 * K_foundation_lat); 
+      let compliance_rad = 1 / (2 * K_foundation_rad); 
+
+      for (let n = 1; n <= N_max; n++) {
+        const q = n * n;
+        const mode_stiff_lat = coeff * (EI_lat * Math.pow(q - 1, 2) + GJ * (q - 1));
+        compliance_lat += 1 / (K_foundation_lat + mode_stiff_lat);
+
+        const mode_stiff_rad = coeff * EI_rad * Math.pow(q - 1, 2);
+        compliance_rad += 1 / (K_foundation_rad + mode_stiff_rad);
+      }
+
+      const K_wheel_lat = (1 / compliance_lat); 
+      const K_wheel_rad = (1 / compliance_rad); 
+
+      // 6. Buckling Approximations 
+      const local_rad_nds = k_axial_nds * Math.pow(cos_nds, 2); 
+      const Frad_N = T_nds_N * K_wheel_rad / local_rad_nds;
+
+      const local_lat_nds = k_axial_nds * sin_nds; 
+      const Flat_N = T_nds_N * K_wheel_lat / local_lat_nds;
+
+      const symmetry = ratio > 1 ? (1 / ratio) : ratio;
+
       return {
-        diameter: diameter_mm * mm_to_m,
-        width_ds: width_ds_mm * mm_to_m,
-        width_nds: width_nds_mm * mm_to_m,
+        ratio_pct    : +(ratio * 100).toFixed(1),
+        symmetry_pct : +(symmetry * 100).toFixed(1),
+        t_nds        : +(T_nds_N / 9.81).toFixed(1),
+        beta_ds      : +(Math.asin(sin_ds) * 180 / Math.PI).toFixed(2),
+        beta_nds     : +(Math.asin(sin_nds) * 180 / Math.PI).toFixed(2),
+        K_lat        : +(K_wheel_lat / 1000).toFixed(1), 
+        K_rad        : +(K_wheel_rad / 1000).toFixed(0),
+        F_lat_kgf    : +(Flat_N / 9.81).toFixed(1),
+        F_rad_kgf    : +(Frad_N / 9.81).toFixed(1),
+        L_ds_mm      : +(L_ds * 1000).toFixed(1),
+        L_nds_mm     : +(L_nds * 1000).toFixed(1),
+        ftf          : +(d_ds + d_nds).toFixed(1),
       };
     }
 
-    function makeRim({ radius_mm, young_mod_pa, shear_mod_pa, I_rad_mm4, I_lat_mm4, J_tor_mm4 }) {
-      return {
-        radius: radius_mm * mm_to_m,
-        young_mod: young_mod_pa,
-        shear_mod: shear_mod_pa,
-        section_type: "general",
-        section_params: {
-          area: 0,
-          I_rad: I_rad_mm4 * mm4_to_m4,
-          I_lat: I_lat_mm4 * mm4_to_m4,
-          J_tor: J_tor_mm4 * mm4_to_m4,
-          I_warp: 0,
-        },
-      };
-    }
-
-    function makeSpoke({ num, num_cross, diameter_mm, offset_mm = 0, young_mod_pa = 210e9 }) {
-      return {
-        num,
-        num_cross,
-        diameter: diameter_mm * mm_to_m,
-        offset: offset_mm * mm_to_m,
-        young_mod: young_mod_pa,
-      };
-    }
-
-    function ModeMatrix(wheel, N = 24) {
-      const R = wheel.rim.radius;
-
-      function spokeEA(spokes) {
-        return spokes.young_mod * Math.PI * Math.pow(spokes.diameter / 2, 2);
-      }
-
-      function spokeGeometry(spokes) {
-        const ns = spokes.num / 2;
-        const theta_cross = (2 * Math.PI * spokes.num_cross) / ns;
-        return { ns, theta_cross };
-      }
-
-      function K_rim({ tension = true, r0 = true } = {}) {
-        const rr = wheel.rim.section_params;
-        const E = wheel.rim.young_mod;
-        const G = wheel.rim.shear_mod;
-        const K_lat = E * rr.I_lat / Math.pow(R, 3);
-        const K_rad = E * rr.I_rad / Math.pow(R, 3);
-        const K_tor = G * rr.J_tor / Math.pow(R, 3);
-        return {
-          K_lat,
-          K_rad,
-          K_tor,
-          tension,
-          r0,
-        };
-      }
-
-      function K_spk({ tension = true, smeared_spokes = true } = {}) {
-        const ds = wheel.spokes_ds;
-        const nds = wheel.spokes_nds;
-        const gds = spokeGeometry(ds);
-        const gnds = spokeGeometry(nds);
-
-        const L_ds = Math.sqrt(wheel.hub.width_ds**2 + R**2 + (wheel.hub.diameter / 2)**2 - 2 * R * (wheel.hub.diameter / 2) * Math.cos(gds.theta_cross));
-        const L_nds = Math.sqrt(wheel.hub.width_nds**2 + R**2 + (wheel.hub.diameter / 2)**2 - 2 * R * (wheel.hub.diameter / 2) * Math.cos(gnds.theta_cross));
-
-        const sin_ds = wheel.hub.width_ds / L_ds;
-        const sin_nds = wheel.hub.width_nds / L_nds;
-        const cos_ds = Math.sqrt(Math.max(0, 1 - sin_ds**2));
-        const cos_nds = Math.sqrt(Math.max(0, 1 - sin_nds**2));
-
-        const EA_ds = spokeEA(ds);
-        const EA_nds = spokeEA(nds);
-
-        const T_ds = ds.tension;
-        const T_nds = nds.tension;
-
-        const k_lat_ds = (T_ds / L_ds) + (EA_ds / L_ds) * sin_ds**2;
-        const k_lat_nds = (T_nds / L_nds) + (EA_nds / L_nds) * sin_nds**2;
-
-        const k_rad_ds = (T_ds / L_ds) + (EA_ds / L_ds) * cos_ds**2;
-        const k_rad_nds = (T_nds / L_nds) + (EA_nds / L_nds) * cos_nds**2;
-
-        const spoke_side_lat = (ds.num / 2) * k_lat_ds + (nds.num / 2) * k_lat_nds;
-        const spoke_side_rad = (ds.num / 2) * k_rad_ds + (nds.num / 2) * k_rad_nds;
-
-        return {
-          spoke_side_lat,
-          spoke_side_rad,
-          L_ds,
-          L_nds,
-          sin_ds,
-          sin_nds,
-          cos_ds,
-          cos_nds,
-          EA_ds,
-          EA_nds,
-          tension,
-          smeared_spokes,
-        };
-      }
-
-      function stiffness() {
-        const Kr = K_rim({});
-        const Ks = K_spk({});
-
-        const Nmode = N;
-        const coeff = Math.PI / Math.pow(R, 3);
-
-        let comp_lat = 1 / (2 * Ks.spoke_side_lat);
-        let comp_rad = 1 / (2 * Ks.spoke_side_rad);
-
-        for (let n = 1; n <= Nmode; n++) {
-          const q = n * n;
-          const lat_mode = coeff * (Kr.K_lat * Math.pow(q - 1, 2) + Kr.K_tor * (q - 1));
-          const rad_mode = coeff * Kr.K_rad * Math.pow(q - 1, 2);
-          comp_lat += 1 / (Ks.spoke_side_lat + lat_mode);
-          comp_rad += 1 / (Ks.spoke_side_rad + rad_mode);
-        }
-
-        return {
-          radial_stiffness: 1 / comp_rad,
-          lateral_stiffness: 1 / comp_lat,
-          torsional_stiffness: Kr.K_tor,
-        };
-      }
-
-      function F_ext({ f_lat = 0, f_rad = 0, f_tan = 0, m_tor = 0, location = 0 }) {
-        return { f_lat, f_rad, f_tan, m_tor, location };
-      }
-
-      function solve(F = F_ext({})) {
-        const K = stiffness();
-        return {
-          d: {
-            lat: F.f_lat / Math.max(K.lateral_stiffness, 1e-9),
-            rad: F.f_rad / Math.max(K.radial_stiffness, 1e-9),
-            tan: F.f_tan / Math.max(K.torsional_stiffness, 1e-9),
-          }
-        };
-      }
-
-      return {
-        wheel,
-        N,
-        K_rim,
-        K_spk,
-        F_ext,
-        solve,
-        stiffness,
-      };
-    }
-
+    // ── CHRIS KING & SPANK PRESETS ───────────────────────────────────────────────
     const PRESETS = [
       { id:'r142', short:'ISO 135/142', name:'CK ISO 135/142 Rear', OLD:142, type:'rear', d_ds:20.1, d_nds:33.9, pcd_ds:57.4, pcd_nds:57.4 },
       { id:'r148', short:'Boost 148', name:'CK Boost 148×12 Rear', OLD:148, type:'rear', d_ds:24.0, d_nds:36.3, pcd_ds:57.4, pcd_nds:57.4 },
@@ -208,6 +142,7 @@
       return '#ef4444';
     };
 
+    // ── CROSS-SECTION SVG ────────────────────────────────────────────────────────
     function CrossSection({ hub_d_ds, hub_d_nds, pcd_ds, pcd_nds, OLD, width=320, compact=false, rimOffsetMm=0 }) {
       const H = compact ? 110 : 160;
       const CX = width / 2;
@@ -220,7 +155,9 @@
       const rx = OLD ? CX + (OLD / 2) * SC : dx + 10;
       const lx = OLD ? CX - (OLD / 2) * SC : nx - 10;
 
-      const rimVisualX = CX + rimOffsetMm * SC;
+      // Rim shifts LEFT toward the NDS flange
+      const rimVisualX = CX - rimOffsetMm * SC;
+      
       const ds_eff = hub_d_ds + rimOffsetMm;
       const nds_eff = hub_d_nds - rimOffsetMm;
       const gid = `g${Math.random().toString(36).slice(2,7)}`;
@@ -346,50 +283,36 @@
         ? { d_ds: dDS, d_nds: dNDS, pcd_ds: pcdDS, pcd_nds: pcdNDS, OLD: null, type: 'rear', name: 'Custom Hub' }
         : { ...PRESETS.find(p => p.id === presetId) };
 
+      // CORRECT OFFSET LOGIC: +3mm to DS, -3mm to NDS
       const d_ds_eff = activeBaseHub.d_ds + rimOffsetMm;
       const d_nds_eff = activeBaseHub.d_nds - rimOffsetMm;
 
       const m = useMemo(() => calcWheel({
-        flange_ds_mm: d_ds_eff,
-        flange_nds_mm: d_nds_eff,
-        pcd_ds_mm: activeBaseHub.pcd_ds,
-        pcd_nds_mm: activeBaseHub.pcd_nds,
-        rim_radius_mm: erd / 2,
-        tension_ds_kgf: tDS,
-        spoke_count: nSpokes,
-        n_cross: 3,
-        spoke_diameter_mm: 2.0,
-        spoke_young_mod_pa: 210e9,
-        rim_young_mod_pa: 69e9,
-        rim_shear_mod_pa: 26e9,
-        rim_I_lat_mm4: 1500,
-        rim_I_rad_mm4: 3000,
-        rim_J_tor_mm4: 500,
-        N: 24,
+        d_ds: d_ds_eff,
+        d_nds: d_nds_eff,
+        pcd_ds: activeBaseHub.pcd_ds,
+        pcd_nds: activeBaseHub.pcd_nds,
+        erd_mm: erd,
+        t_ds: tDS,
+        n_spokes: nSpokes
       }), [d_ds_eff, d_nds_eff, activeBaseHub.pcd_ds, activeBaseHub.pcd_nds, erd, tDS, nSpokes]);
 
       const chartData = useMemo(() => {
         return PRESETS.map(p => {
+          // CORRECT OFFSET LOGIC applied universally to the bar chart data
           const d_ds = p.d_ds + rimOffsetMm;
           const d_nds = p.d_nds - rimOffsetMm;
+          
           const res = calcWheel({
-            flange_ds_mm: d_ds,
-            flange_nds_mm: d_nds,
-            pcd_ds_mm: p.pcd_ds,
-            pcd_nds_mm: p.pcd_nds,
-            rim_radius_mm: erd / 2,
-            tension_ds_kgf: tDS,
-            spoke_count: nSpokes,
-            n_cross: 3,
-            spoke_diameter_mm: 2.0,
-            spoke_young_mod_pa: 210e9,
-            rim_young_mod_pa: 69e9,
-            rim_shear_mod_pa: 26e9,
-            rim_I_lat_mm4: 1500,
-            rim_I_rad_mm4: 3000,
-            rim_J_tor_mm4: 500,
-            N: 24,
+            d_ds: d_ds,
+            d_nds: d_nds,
+            pcd_ds: p.pcd_ds,
+            pcd_nds: p.pcd_nds,
+            erd_mm: erd,
+            t_ds: tDS,
+            n_spokes: nSpokes
           });
+          
           return {
             ...p,
             d_ds_display: d_ds,
@@ -398,7 +321,7 @@
             isActive: !custom && p.id === presetId,
           };
         });
-      }, [offsetRim, presetId, custom, dDS, dNDS, pcdDS, pcdNDS, erd, tDS, nSpokes, rimOffsetMm]);
+      }, [offsetRim, presetId, custom, erd, tDS, nSpokes, rimOffsetMm]);
 
       const rc = symCol(m.symmetry_pct);
 
@@ -666,8 +589,8 @@
 
             <div style={{marginTop:40,borderTop:`1px solid #0d1826`,paddingTop:12,fontSize:8,color:'#3d5a80',lineHeight:2}}>
               <strong>Math Model:</strong> Analytical approximation using Ford-style modal terminology and SI units. <br/>
-              <strong>Offset Convention:</strong> Rear-wheel asymmetric rim shifts the rim bed toward the NDS by 3mm, so effective DS span increases and effective NDS span decreases. <br/>
-              <strong>Interpretation:</strong> Better symmetry and bracing balance are treated as improving effective wheel support.
+              <strong>Offset Convention:</strong> Rear-wheel asymmetric rim shifts the rim bed toward the NDS by 3mm, so effective DS span increases (+3mm) and effective NDS span decreases (-3mm). <br/>
+              <strong>Interpretation:</strong> Better symmetry and bracing balance are treated as improving effective wheel support and buckling thresholds.
             </div>
           </div>
         </div>
