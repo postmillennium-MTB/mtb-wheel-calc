@@ -9,7 +9,7 @@ const WHEEL_SIZES = {
 };
 
 // ── PHYSICS ENGINE ────────────────────────────────────────────────────────────
-function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes }) {
+function CalcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes }) {
   const EA   = 210e9 * Math.PI * 1e-6;          // 2.0 mm spoke
   const Ns   = Math.floor(n_spokes / 2);
   const R_E  = erd_mm / 2 / 1000;               // ERD radius (m)
