@@ -24,7 +24,7 @@
       '26"':   { erd: 534, label: '26" ISO 559' },
     };
 
-    // ── MATH ENGINE (Ford 2018 Full Dual-Side Evaluation) ──────────────────────
+    // ── MATH ENGINE (Ford 2018 with Exact 3D Vectors) ──────────────────────
     function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes }) {
       const E_spoke = 210e9; 
       const d_spoke = 2.0e-3; 
@@ -51,28 +51,38 @@
       const r_hub_ds = pcd_ds / 2 / 1000;
       const r_hub_nds = pcd_nds / 2 / 1000;
 
-      const L2_ds = width_ds**2 + R**2 + r_hub_ds**2 - 2 * R * r_hub_ds * Math.cos(theta_cross);
-      const L2_nds = width_nds**2 + R**2 + r_hub_nds**2 - 2 * R * r_hub_nds * Math.cos(theta_cross);
-      const L_ds = Math.sqrt(L2_ds);
-      const L_nds = Math.sqrt(L2_nds);
-
-      const sin_ds = width_ds / L_ds;
-      const sin_nds = width_nds / L_nds;
-      const cos_ds = Math.sqrt(Math.max(0, 1 - Math.pow(sin_ds, 2)));
-      const cos_nds = Math.sqrt(Math.max(0, 1 - Math.pow(sin_nds, 2)));
+      // RIGOROUS 3D VECTOR GEOMETRY (Fixed from 2D approximation)
+      // Drive Side Spoke Vector
+      const rad_ds = R - r_hub_ds * Math.cos(theta_cross);
+      const tan_ds = r_hub_ds * Math.sin(theta_cross);
+      const lat_ds = width_ds;
+      const L_ds = Math.sqrt(rad_ds**2 + tan_ds**2 + lat_ds**2);
       
-      const ratio = sin_ds / sin_nds;
+      const c_lat_ds = lat_ds / L_ds; // sin(beta)
+      const c_rad_ds = rad_ds / L_ds; // true radial direction cosine
+
+      // Non-Drive Side Spoke Vector
+      const rad_nds = R - r_hub_nds * Math.cos(theta_cross);
+      const tan_nds = r_hub_nds * Math.sin(theta_cross);
+      const lat_nds = width_nds;
+      const L_nds = Math.sqrt(rad_nds**2 + tan_nds**2 + lat_nds**2);
+
+      const c_lat_nds = lat_nds / L_nds;
+      const c_rad_nds = rad_nds / L_nds;
+      
+      // Tension Balance
+      const ratio = c_lat_ds / c_lat_nds;
       const T_ds_N = t_ds * 9.81; 
       const T_nds_N = T_ds_N * ratio;
 
       const k_axial_ds = EA / L_ds;
       const k_axial_nds = EA / L_nds;
 
-      const k_lat_ds = (T_ds_N / L_ds) + k_axial_ds * Math.pow(sin_ds, 2);
-      const k_lat_nds = (T_nds_N / L_nds) + k_axial_nds * Math.pow(sin_nds, 2);
+      const k_lat_ds = (T_ds_N / L_ds) + k_axial_ds * Math.pow(c_lat_ds, 2);
+      const k_lat_nds = (T_nds_N / L_nds) + k_axial_nds * Math.pow(c_lat_nds, 2);
       
-      const k_rad_ds = (T_ds_N / L_ds) + k_axial_ds * Math.pow(cos_ds, 2);
-      const k_rad_nds = (T_nds_N / L_nds) + k_axial_nds * Math.pow(cos_nds, 2);
+      const k_rad_ds = (T_ds_N / L_ds) + k_axial_ds * Math.pow(c_rad_ds, 2);
+      const k_rad_nds = (T_nds_N / L_nds) + k_axial_nds * Math.pow(c_rad_nds, 2);
 
       const K_foundation_lat = (N_sides / 2) * k_lat_ds + (N_sides / 2) * k_lat_nds; 
       const K_foundation_rad = (N_sides / 2) * k_rad_ds + (N_sides / 2) * k_rad_nds;
@@ -87,6 +97,7 @@
         const q = n * n;
         const mode_stiff_lat = coeff * (EI_lat * Math.pow(q - 1, 2) + GJ * (q - 1));
         compliance_lat += 1 / (K_foundation_lat + mode_stiff_lat);
+        
         const mode_stiff_rad = coeff * EI_rad * Math.pow(q - 1, 2);
         compliance_rad += 1 / (K_foundation_rad + mode_stiff_rad);
       }
@@ -94,15 +105,18 @@
       const K_wheel_lat = (1 / compliance_lat); 
       const K_wheel_rad = (1 / compliance_rad); 
 
-      // DETENSION EVALUATION (SLACK LIMIT)
-      const local_lat_nds = k_axial_nds * sin_nds; 
+      // DUAL-SIDE DETENSION EVALUATION (SLACK LIMIT)
+      // Force to detension NDS spoke (impact from DS pushing towards NDS)
+      const local_lat_nds = k_axial_nds * c_lat_nds; 
       const Flat_nds_N = T_nds_N * K_wheel_lat / local_lat_nds;
-      const local_lat_ds = k_axial_ds * sin_ds;
+      
+      // Force to detension DS spoke (impact from NDS pushing towards DS)
+      const local_lat_ds = k_axial_ds * c_lat_ds;
       const Flat_ds_N = T_ds_N * K_wheel_lat / local_lat_ds;
 
-      const local_rad_nds = k_axial_nds * Math.pow(cos_nds, 2); 
+      const local_rad_nds = k_axial_nds * Math.pow(c_rad_nds, 2); 
       const Frad_nds_N = T_nds_N * K_wheel_rad / local_rad_nds;
-      const local_rad_ds = k_axial_ds * Math.pow(cos_ds, 2); 
+      const local_rad_ds = k_axial_ds * Math.pow(c_rad_ds, 2); 
       const Frad_ds_N = T_ds_N * K_wheel_rad / local_rad_ds;
 
       // The true limit is whichever side goes slack first
@@ -115,8 +129,8 @@
         ratio_pct    : +(ratio * 100).toFixed(1),
         symmetry_pct : +(symmetry * 100).toFixed(1),
         t_nds        : +(T_nds_N / 9.81).toFixed(1),
-        beta_ds      : +(Math.asin(sin_ds) * 180 / Math.PI).toFixed(2),
-        beta_nds     : +(Math.asin(sin_nds) * 180 / Math.PI).toFixed(2),
+        beta_ds      : +(Math.asin(c_lat_ds) * 180 / Math.PI).toFixed(2),
+        beta_nds     : +(Math.asin(c_lat_nds) * 180 / Math.PI).toFixed(2),
         K_lat        : +(K_wheel_lat / 1000).toFixed(1), 
         K_rad        : +(K_wheel_rad / 1000).toFixed(0),
         F_lat_kgf    : +(Flat_N / 9.81).toFixed(1),
@@ -131,7 +145,7 @@
       { id:'r142', short:'ISO 135/142', name:'CK ISO 135/142 Rear', OLD:142, type:'rear', d_ds:20.1, d_nds:33.9, pcd_ds:57.4, pcd_nds:57.4 },
       { id:'r148', short:'Boost 148', name:'CK Boost 148×12 Rear', OLD:148, type:'rear', d_ds:24.0, d_nds:36.3, pcd_ds:57.4, pcd_nds:57.4 },
       { id:'r157', short:'Superboost 157', name:'CK Superboost 157×12 Rear', OLD:157, type:'rear', d_ds:28.8, d_nds:42.3, pcd_ds:57.4, pcd_nds:57.4 },
-      { id:'r157b', short:'Spank 150/157', name:'CSpank 150/157 Rear', OLD:157, type:'rear', d_ds:29.5, d_nds:39.6, pcd_ds:58.0, pcd_nds:58.0 },
+      { id:'r157b', short:'Spank 150/157', name:'Spank 150/157 Rear', OLD:157, type:'rear', d_ds:29.5, d_nds:39.6, pcd_ds:58.0, pcd_nds:58.0 },
     ];
 
     const symCol = (sym) => {
@@ -173,31 +187,26 @@
               <stop offset="100%" stopColor="#92400e" />
             </linearGradient>
           </defs>
-
           <line x1={dx} y1={AY - pcd_ds * SC * 0.18} x2={rimVisualX} y2={compact ? 5 : 8} stroke="#f59e0b" strokeWidth={0.8} opacity={0.3}/>
           <line x1={nx} y1={AY - pcd_nds * SC * 0.18} x2={rimVisualX} y2={compact ? 5 : 8} stroke="#3b82f6" strokeWidth={0.8} opacity={0.3}/>
           <circle cx={rimVisualX} cy={compact ? 5 : 8} r={3} fill="none" stroke="#1e3050" strokeWidth={1}/>
           {!compact && <text x={rimVisualX + 8} y={12} fill="#1e3050" fontSize={7} fontFamily="monospace">{rimOffsetMm !== 0 ? 'RIM (OFFSET)' : 'RIM'}</text>}
-
           {OLD && <>
             <line x1={lx} y1={AY - FH - 10} x2={rx} y2={AY - FH - 10} stroke="#1e3050" strokeWidth={1}/>
             <line x1={lx} y1={AY - FH - 13} x2={lx} y2={AY - FH - 7} stroke="#1e3050" strokeWidth={1}/>
             <line x1={rx} y1={AY - FH - 13} x2={rx} y2={AY - FH - 7} stroke="#1e3050" strokeWidth={1}/>
             <text x={CX} y={AY - FH - 12} textAnchor="middle" fill="#2d4a6a" fontSize={compact ? 7 : 8} fontFamily="monospace">OLD {OLD}mm</text>
           </>}
-
           <line x1={lx - 5} y1={AY} x2={rx + 5} y2={AY} stroke="#1e3050" strokeWidth={2}/>
           <rect x={nx} y={AY - 5} width={Math.max(dx - nx, 1)} height={10} fill="#0a1620" stroke="#1e3050" strokeWidth={1}/>
           <rect x={lx - 6} y={AY - 14} width={6} height={28} fill="#142030" rx={1}/>
           <rect x={rx} y={AY - 14} width={6} height={28} fill="#142030" rx={1}/>
           <rect x={nx - 4} y={AY - FH} width={8} height={FH * 2} fill={`url(#${gid}b)`} rx={1}/>
           <rect x={dx - 4} y={AY - FH} width={8} height={FH * 2} fill={`url(#${gid}a)`} rx={1}/>
-
           {!compact && <>
             <text x={nx} y={AY - FH - 4} textAnchor="middle" fill="#60a5fa" fontSize={7} fontFamily="monospace">⌀{pcd_nds}</text>
             <text x={dx} y={AY - FH - 4} textAnchor="middle" fill="#fbbf24" fontSize={7} fontFamily="monospace">⌀{pcd_ds}</text>
           </>}
-
           <line x1={CX} y1={AY - FH} x2={CX} y2={AY + FH + 18} stroke="#1e3050" strokeWidth={1} strokeDasharray="3,2"/>
           <line x1={nx} y1={AY + FH + 5} x2={rimVisualX} y2={AY + FH + 5} stroke="#3b82f6" strokeWidth={1}/>
           <line x1={nx} y1={AY + FH + 2} x2={nx} y2={AY + FH + 8} stroke="#3b82f6" strokeWidth={1}/>
@@ -239,7 +248,7 @@
 
     function MetricCard({ label, value, unit, color, sub }) {
       return (
-        <div style={{background:'#0a1620',border:`1px solid ${color}33`,borderRadius:3,padding:'10px 14px',textAlign:'center'}}>
+        <div style={{background:'#0a1620',border:`1px solid ${color}33`,borderRadius:3,padding:'10px 14px',textAlign:'center',display:'flex',flexDirection:'column',justifyContent:'center'}}>
           <div style={{fontFamily:'monospace',fontSize:8,color:'#2d4a6a',letterSpacing:1,marginBottom:4}}>{label}</div>
           <div style={{fontFamily:'monospace',fontSize:20,color:color,fontWeight:'300',lineHeight:1}}>{value}</div>
           <div style={{fontFamily:'monospace',fontSize:9,color:'#2d4a6a',marginTop:2}}>{unit}</div>
@@ -272,13 +281,9 @@
       const d_nds_eff = activeBaseHub.d_nds - rimOffsetMm;
 
       const m = useMemo(() => calcWheel({
-        d_ds: d_ds_eff,
-        d_nds: d_nds_eff,
-        pcd_ds: activeBaseHub.pcd_ds,
-        pcd_nds: activeBaseHub.pcd_nds,
-        erd_mm: erd,
-        t_ds: tDS,
-        n_spokes: nSpokes
+        d_ds: d_ds_eff, d_nds: d_nds_eff,
+        pcd_ds: activeBaseHub.pcd_ds, pcd_nds: activeBaseHub.pcd_nds,
+        erd_mm: erd, t_ds: tDS, n_spokes: nSpokes
       }), [d_ds_eff, d_nds_eff, activeBaseHub.pcd_ds, activeBaseHub.pcd_nds, erd, tDS, nSpokes]);
 
       const chartData = useMemo(() => {
@@ -383,27 +388,37 @@
                   </div>
 
                   <div style={{display:'flex',flexDirection:'column',gap:12}}>
+                    {wheelKey !== '29"' && (
+                      <div style={{background:'#0a1620',border:`1px solid #3b82f6`,borderRadius:3,padding:14}}>
+                        <div style={{fontSize:9,color:'#60a5fa',letterSpacing:2,marginBottom:8}}>WHEEL SIZE SCALING</div>
+                        <div style={{fontSize:10,color:'#e2e8f0',lineHeight:1.8}}>
+                          <strong>Why is a {wheelKey} wheel stronger?</strong><br/>
+                          The math engine uses strict 3D space vectors. Shorter spokes have a steeper angle to the hub and less leverage against the rim. As ERD shrinks, stiffness increases exponentially ($1/L^3$) and the detension limit increases linearly ($1/L$).
+                        </div>
+                      </div>
+                    )}
                     {offsetRim && (
                       <div style={{background:'#166534',border:`1px solid #22c55e`,borderRadius:3,padding:14}}>
-                        <div style={{fontSize:9,color:'#4ade80',letterSpacing:2,marginBottom:8}}>OFFSET COMPOUND MATH EXPLAINER</div>
+                        <div style={{fontSize:9,color:'#4ade80',letterSpacing:2,marginBottom:8}}>OFFSET COMPOUND MULTIPLIER</div>
                         <div style={{fontSize:10,color:'#e2e8f0',lineHeight:1.8}}>
-                          <strong>Why does strength jump 30%+ with only a 3mm shift?</strong><br/>
-                          The detension limit calculates when the weakest spoke (NDS) hits 0 kgf. The 3mm rim offset triggers a double-multiplier effect:<br/>
-                          1. <strong>Tension Multiplier:</strong> By equalizing geometry, NDS static tension rises ~22%.<br/>
-                          2. <strong>Leverage Multiplier:</strong> The NDS bracing angle becomes steeper, giving lateral impacts ~8% less mechanical advantage over the spoke.<br/>
-                          <em>1.22 × 1.08 = ~1.32. You get a massive 32% increase in failure threshold without significantly changing lateral stiffness.</em>
+                          <strong>Why does strength jump 32% with only a 3mm shift?</strong><br/>
+                          Because the Drive Side is capped at 100 kgf, the math reveals a double-multiplier effect:<br/>
+                          1. <strong>Tension:</strong> NDS static tension rises ~22%.<br/>
+                          2. <strong>Leverage:</strong> The steeper NDS angle gives lateral impacts ~8% less mechanical advantage over the spoke.<br/>
+                          <em>1.22 × 1.08 = ~1.32. You get a massive 32% increase in failure threshold, even though overall wheel stiffness barely changes.</em>
                         </div>
                       </div>
                     )}
                     <div style={{background:CARD,border:`1px solid ${BDR}`,borderRadius:3,padding:14}}>
-                      <div style={{fontSize:9,color:GRN,letterSpacing:2,marginBottom:8}}>FORD TERMINOLOGY</div>
-                      <div style={{fontSize:10,color:'#2d4a6a',lineHeight:1.8}}>
-                        <div>BicycleWheel → hub + rim + spokes</div>
-                        <div>ModeMatrix → mode stiffness matrix solve</div>
-                        <div>K_rim + K_spk → wheel modal stiffness matrix</div>
-                        <div>F_ext → external load vector</div>
-                        <div>N → highest mode number used in the solve</div>
+                      <div style={{fontSize:9,color:'#2d4a6a',letterSpacing:2,marginBottom:8}}>TENSION BALANCE</div>
+                      <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                        <span style={{fontSize:9,color:'#2d4a6a'}}>Symmetry %</span>
+                        <span style={{fontSize:12,color:rc,fontWeight:'bold'}}>{m.symmetry_pct}%</span>
                       </div>
+                      <div style={{background:'#060d18',height:12,borderRadius:2,position:'relative',marginBottom:4}}>
+                        <div style={{position:'absolute',left:0,top:0,bottom:0,width:`${m.symmetry_pct}%`,background:rc,borderRadius:2}}/>
+                      </div>
+                      <div style={{fontSize:9,color:'#4a6a8a',marginTop:6}}>NDS/DS Absolute Ratio: {m.ratio_pct}%</div>
                     </div>
                   </div>
                 </div>
@@ -415,8 +430,8 @@
                 <div style={{background:CARD,border:`1px solid ${BDR}`,padding:'14px 18px',borderRadius:3,marginBottom:16}}>
                   <div style={{fontSize:9,color:GRN,letterSpacing:2,marginBottom:10}}>ACTIVE GEOMETRY PERFORMANCE MATRICES</div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10}}>
-                    <MetricCard label="LATERAL SLACK LIMIT" value={m.F_lat_kgf} unit="kgf" color="#f59e0b" sub="Force to detension weakest spoke"/>
-                    <MetricCard label="RADIAL SLACK LIMIT" value={m.F_rad_kgf} unit="kgf" color="#a78bfa" sub="Force to detension weakest spoke"/>
+                    <MetricCard label="LATERAL DETENSION LIMIT" value={m.F_lat_kgf} unit="kgf" color="#f59e0b" sub="Force to slacken weakest spoke"/>
+                    <MetricCard label="RADIAL DETENSION LIMIT" value={m.F_rad_kgf} unit="kgf" color="#a78bfa" sub="Force to slacken weakest spoke"/>
                     <MetricCard label="LATERAL STIFFNESS" value={m.K_lat} unit="N/mm" color="#38bdf8" sub="Resistance to deflection"/>
                     <MetricCard label="RADIAL STIFFNESS" value={m.K_rad} unit="N/mm" color="#4ade80" sub="Resistance to crushing"/>
                   </div>
@@ -462,8 +477,8 @@
                       <th style={{padding:6}}>Effective d_NDS</th>
                       <th style={{padding:6}}>Symmetry</th>
                       <th style={{padding:6}}>Lateral K (N/mm)</th>
-                      <th style={{padding:6}}>Lat Slack Limit</th>
-                      <th style={{padding:6}}>Rad Slack Limit</th>
+                      <th style={{padding:6}}>Lat Detension limit</th>
+                      <th style={{padding:6}}>Rad Detension limit</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -482,6 +497,12 @@
                 </table>
               </div>
             )}
+
+            <div style={{marginTop:40,borderTop:`1px solid #0d1826`,paddingTop:12,fontSize:8,color:'#3d5a80',lineHeight:2}}>
+              <strong>Math Model:</strong> Analytical approximation using Ford-style modal terminology and explicit 3D space vectors. Independently calculates buckling failure force required for both DS and NDS, returning the lower bound.<br/>
+              <strong>Offset Convention:</strong> Rear-wheel asymmetric rim shifts the rim bed toward the NDS by 3mm, so effective DS span increases (+3mm) and effective NDS span decreases (-3mm). <br/>
+              <strong>Interpretation:</strong> The detensioning threshold reveals buckling immunity. Offset massively increases lateral failure limits without materially improving overall wheel stiffness.
+            </div>
           </div>
         </div>
       );
