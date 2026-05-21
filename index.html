@@ -24,18 +24,16 @@
       '26"':   { erd: 534, label: '26" ISO 559' },
     };
 
-    // ── MATH ENGINE (Ford 2018 Implementation) ───────────────────────────────────
+    // ── MATH ENGINE (Ford 2018 Full Dual-Side Evaluation) ──────────────────────
     function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes }) {
-      // 1. Explicit Material & Spoke Constants (SI Units)
       const E_spoke = 210e9; 
       const d_spoke = 2.0e-3; 
       const A_spoke = Math.PI * Math.pow(d_spoke / 2, 2);
       const EA = E_spoke * A_spoke; 
       
-      // 2. Explicit Rim Properties (Using values from user prompt)
       const E_rim = 69e9; 
       const G_rim = 26e9; 
-      const I_lat = 1500 * 1e-12; // mm^4 to m^4
+      const I_lat = 1500 * 1e-12; 
       const I_rad = 3000 * 1e-12; 
       const J_tor = 500 * 1e-12; 
       
@@ -43,7 +41,6 @@
       const EI_rad = E_rim * I_rad;
       const GJ     = G_rim * J_tor;
 
-      // 3. Derived Geometry
       const R = erd_mm / 2 / 1000; 
       const n_cross = 3; 
       const N_sides = n_spokes / 2;
@@ -68,7 +65,6 @@
       const T_ds_N = t_ds * 9.81; 
       const T_nds_N = T_ds_N * ratio;
 
-      // 4. Elastic Foundation Stiffness
       const k_axial_ds = EA / L_ds;
       const k_axial_nds = EA / L_nds;
 
@@ -78,11 +74,9 @@
       const k_rad_ds = (T_ds_N / L_ds) + k_axial_ds * Math.pow(cos_ds, 2);
       const k_rad_nds = (T_nds_N / L_nds) + k_axial_nds * Math.pow(cos_nds, 2);
 
-      // (N_sides / 2) because there are N/2 spokes per side, smeared across the rim
       const K_foundation_lat = (N_sides / 2) * k_lat_ds + (N_sides / 2) * k_lat_nds; 
       const K_foundation_rad = (N_sides / 2) * k_rad_ds + (N_sides / 2) * k_rad_nds;
 
-      // 5. Modal Summation (Fourier Series)
       const N_max = 24; 
       const coeff = Math.PI / Math.pow(R, 3); 
 
@@ -93,7 +87,6 @@
         const q = n * n;
         const mode_stiff_lat = coeff * (EI_lat * Math.pow(q - 1, 2) + GJ * (q - 1));
         compliance_lat += 1 / (K_foundation_lat + mode_stiff_lat);
-
         const mode_stiff_rad = coeff * EI_rad * Math.pow(q - 1, 2);
         compliance_rad += 1 / (K_foundation_rad + mode_stiff_rad);
       }
@@ -101,12 +94,23 @@
       const K_wheel_lat = (1 / compliance_lat); 
       const K_wheel_rad = (1 / compliance_rad); 
 
-      // 6. Buckling Approximations 
-      const local_rad_nds = k_axial_nds * Math.pow(cos_nds, 2); 
-      const Frad_N = T_nds_N * K_wheel_rad / local_rad_nds;
-
+      // BI-LATERAL DETENSION EVALUATION
+      // Force to detension NDS spoke (impact from DS pushing towards NDS)
       const local_lat_nds = k_axial_nds * sin_nds; 
-      const Flat_N = T_nds_N * K_wheel_lat / local_lat_nds;
+      const Flat_nds_N = T_nds_N * K_wheel_lat / local_lat_nds;
+      // Force to detension DS spoke (impact from NDS pushing towards DS)
+      const local_lat_ds = k_axial_ds * sin_ds;
+      const Flat_ds_N = T_ds_N * K_wheel_lat / local_lat_ds;
+
+      // Force to detension radially
+      const local_rad_nds = k_axial_nds * Math.pow(cos_nds, 2); 
+      const Frad_nds_N = T_nds_N * K_wheel_rad / local_rad_nds;
+      const local_rad_ds = k_axial_ds * Math.pow(cos_ds, 2); 
+      const Frad_ds_N = T_ds_N * K_wheel_rad / local_rad_ds;
+
+      // The true structural limit is whichever spoke collapses first
+      const Flat_N = Math.min(Flat_nds_N, Flat_ds_N);
+      const Frad_N = Math.min(Frad_nds_N, Frad_ds_N);
 
       const symmetry = ratio > 1 ? (1 / ratio) : ratio;
 
@@ -126,12 +130,11 @@
       };
     }
 
-    // ── CHRIS KING & SPANK PRESETS ───────────────────────────────────────────────
     const PRESETS = [
       { id:'r142', short:'ISO 135/142', name:'CK ISO 135/142 Rear', OLD:142, type:'rear', d_ds:20.1, d_nds:33.9, pcd_ds:57.4, pcd_nds:57.4 },
       { id:'r148', short:'Boost 148', name:'CK Boost 148×12 Rear', OLD:148, type:'rear', d_ds:24.0, d_nds:36.3, pcd_ds:57.4, pcd_nds:57.4 },
       { id:'r157', short:'Superboost 157', name:'CK Superboost 157×12 Rear', OLD:157, type:'rear', d_ds:28.8, d_nds:42.3, pcd_ds:57.4, pcd_nds:57.4 },
-      { id:'r157b', short:'Spank 150/157', name:'Spank 150/157 Rear', OLD:157, type:'rear', d_ds:29.5, d_nds:39.5, pcd_ds:58.0, pcd_nds:58.0 },
+      { id:'r157b', short:'Spank 150/157', name:'CSpank 150/157 Rear', OLD:157, type:'rear', d_ds:29.5, d_nds:39.6, pcd_ds:58.0, pcd_nds:58.0 },
     ];
 
     const symCol = (sym) => {
@@ -142,7 +145,6 @@
       return '#ef4444';
     };
 
-    // ── CROSS-SECTION SVG ────────────────────────────────────────────────────────
     function CrossSection({ hub_d_ds, hub_d_nds, pcd_ds, pcd_nds, OLD, width=320, compact=false, rimOffsetMm=0 }) {
       const H = compact ? 110 : 160;
       const CX = width / 2;
@@ -155,7 +157,6 @@
       const rx = OLD ? CX + (OLD / 2) * SC : dx + 10;
       const lx = OLD ? CX - (OLD / 2) * SC : nx - 10;
 
-      // Rim shifts LEFT toward the NDS flange
       const rimVisualX = CX - rimOffsetMm * SC;
       
       const ds_eff = hub_d_ds + rimOffsetMm;
@@ -283,7 +284,6 @@
         ? { d_ds: dDS, d_nds: dNDS, pcd_ds: pcdDS, pcd_nds: pcdNDS, OLD: null, type: 'rear', name: 'Custom Hub' }
         : { ...PRESETS.find(p => p.id === presetId) };
 
-      // CORRECT OFFSET LOGIC: +3mm to DS, -3mm to NDS
       const d_ds_eff = activeBaseHub.d_ds + rimOffsetMm;
       const d_nds_eff = activeBaseHub.d_nds - rimOffsetMm;
 
@@ -299,7 +299,6 @@
 
       const chartData = useMemo(() => {
         return PRESETS.map(p => {
-          // CORRECT OFFSET LOGIC applied universally to the bar chart data
           const d_ds = p.d_ds + rimOffsetMm;
           const d_nds = p.d_nds - rimOffsetMm;
           
@@ -517,10 +516,10 @@
                 <div style={{background:CARD,border:`1px solid ${BDR}`,padding:'14px 18px',borderRadius:3,marginBottom:16}}>
                   <div style={{fontSize:9,color:GRN,letterSpacing:2,marginBottom:10}}>ACTIVE GEOMETRY PERFORMANCE MATRICES</div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10}}>
-                    <MetricCard label="LATERAL STRENGTH" value={m.F_lat_kgf} unit="kgf" color="#f59e0b" sub="Sideways deflection proxy"/>
-                    <MetricCard label="RADIAL STRENGTH" value={m.F_rad_kgf} unit="kgf" color="#a78bfa" sub="Vertical load proxy"/>
-                    <MetricCard label="LATERAL STIFFNESS" value={m.K_lat} unit="N/mm" color="#38bdf8"/>
-                    <MetricCard label="RADIAL STIFFNESS" value={m.K_rad} unit="N/mm" color="#4ade80"/>
+                    <MetricCard label="LATERAL DETENSION LIMIT" value={m.F_lat_kgf} unit="kgf" color="#f59e0b" sub="Force to slacken weakest spoke"/>
+                    <MetricCard label="RADIAL DETENSION LIMIT" value={m.F_rad_kgf} unit="kgf" color="#a78bfa" sub="Force to slacken weakest spoke"/>
+                    <MetricCard label="LATERAL STIFFNESS" value={m.K_lat} unit="N/mm" color="#38bdf8" sub="Wheel resistance to deflection"/>
+                    <MetricCard label="RADIAL STIFFNESS" value={m.K_rad} unit="N/mm" color="#4ade80" sub="Wheel resistance to crushing"/>
                   </div>
                 </div>
 
@@ -568,7 +567,8 @@
                       <th style={{padding:6}}>Effective d_NDS</th>
                       <th style={{padding:6}}>Symmetry</th>
                       <th style={{padding:6}}>Lateral K (N/mm)</th>
-                      <th style={{padding:6}}>Radial Force limit</th>
+                      <th style={{padding:6}}>Lat Detension limit</th>
+                      <th style={{padding:6}}>Rad Detension limit</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -579,6 +579,7 @@
                         <td style={{padding:6,color:'#60a5fa'}}>{h.d_nds_display.toFixed(1)}mm</td>
                         <td style={{padding:6,color:symCol(h.symmetry_pct),fontWeight:'bold'}}>{h.symmetry_pct}%</td>
                         <td style={{padding:6}}>{h.K_lat}</td>
+                        <td style={{padding:6,color:'#f59e0b'}}>{h.F_lat_kgf}kgf</td>
                         <td style={{padding:6,color:'#a78bfa'}}>{h.F_rad_kgf}kgf</td>
                       </tr>
                     ))}
@@ -588,9 +589,9 @@
             )}
 
             <div style={{marginTop:40,borderTop:`1px solid #0d1826`,paddingTop:12,fontSize:8,color:'#3d5a80',lineHeight:2}}>
-              <strong>Math Model:</strong> Analytical approximation using Ford-style modal terminology and SI units. <br/>
+              <strong>Math Model:</strong> Analytical approximation using Ford-style modal terminology and SI units. Independently calculates buckling failure force required for both DS and NDS, returning the lower bound.<br/>
               <strong>Offset Convention:</strong> Rear-wheel asymmetric rim shifts the rim bed toward the NDS by 3mm, so effective DS span increases (+3mm) and effective NDS span decreases (-3mm). <br/>
-              <strong>Interpretation:</strong> Better symmetry and bracing balance are treated as improving effective wheel support and buckling thresholds.
+              <strong>Interpretation:</strong> Offset massively increases Lateral Strength (Force to slacken spoke) without materially improving Lateral Stiffness (resistance to deflection).
             </div>
           </div>
         </div>
