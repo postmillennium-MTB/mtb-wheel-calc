@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hub Analysis Tool</title>
+    <title>Rear Hub Analysis Tool</title>
     <!-- Load React 18 -->
     <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
@@ -33,51 +33,43 @@
 
         // ── RIGOROUS PHYSICS ENGINE (Based on Ford's structural models) ───────────────
         function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes }) {
-          // 1. Explicit Material & Spoke Constants (SI Units)
-          const E_spoke = 210e9; // Pa, Steel
-          const d_spoke = 2.0e-3; // 2.0mm diameter
+          const E_spoke = 210e9; 
+          const d_spoke = 2.0e-3; 
           const A_spoke = Math.PI * Math.pow(d_spoke / 2, 2);
-          const EA = E_spoke * A_spoke; // Spoke axial stiffness (N)
+          const EA = E_spoke * A_spoke; 
           
-          // 2. Explicit Rim Properties (Typical Alloy Rim e.g. DT Swiss TK540)
-          const E_rim = 69e9; // Pa, Aluminum
-          const G_rim = 26e9; // Pa, Aluminum shear modulus
-          const I_lat = 7e-10;  // m^4, lateral moment of inertia
-          const I_rad = 22e-10; // m^4, radial moment of inertia
-          const J_tor = 15e-10; // m^4, torsional constant
+          const E_rim = 69e9; 
+          const G_rim = 26e9; 
+          const I_lat = 7e-10;  
+          const I_rad = 22e-10; 
+          const J_tor = 15e-10; 
           
           const EI_lat = E_rim * I_lat;
           const EI_rad = E_rim * I_rad;
           const GJ     = G_rim * J_tor;
 
-          // 3. Derived Geometry Variables
-          const R = erd_mm / 2 / 1000; // Rim radius (m) derived directly from ERD
+          const R = erd_mm / 2 / 1000; 
           const n_cross = 3; 
           const theta_cross = (n_cross * 4 * Math.PI) / n_spokes; 
           const N_sides = n_spokes / 2;
 
-          // Hub inputs to meters
           const width_ds = d_ds / 1000;
           const width_nds = d_nds / 1000;
           const r_hub_ds = pcd_ds / 2 / 1000;
           const r_hub_nds = pcd_nds / 2 / 1000;
 
-          // Explicit 3D spoke vectors
           const L2_ds = width_ds**2 + R**2 + r_hub_ds**2 - 2 * R * r_hub_ds * Math.cos(theta_cross);
           const L2_nds = width_nds**2 + R**2 + r_hub_nds**2 - 2 * R * r_hub_nds * Math.cos(theta_cross);
           const L_ds = Math.sqrt(L2_ds);
           const L_nds = Math.sqrt(L2_nds);
 
-          // Bracing angles (sin_beta = width / L)
           const sin_ds = width_ds / L_ds;
           const sin_nds = width_nds / L_nds;
           
-          // Tension Balance (T_ds * sin_ds = T_nds * sin_nds)
           const ratio = sin_ds / sin_nds;
           const T_ds_N = t_ds * 9.81; 
           const T_nds_N = T_ds_N * ratio;
 
-          // 4. Elastic Foundation Stiffness (Continuous Ring Model)
           const k_axial_ds = EA / L_ds;
           const k_axial_nds = EA / L_nds;
 
@@ -92,7 +84,6 @@
           const K_foundation_lat = (N_sides / 2) * (k_lat_ds + k_lat_nds); 
           const K_foundation_rad = (N_sides / 2) * (k_rad_ds + k_rad_nds);
 
-          // 5. Modal Summation (Fourier Series for Rim Deflection)
           const N_max = Math.floor(n_spokes / 2); 
           const coeff = Math.PI / Math.pow(R, 3); 
 
@@ -111,8 +102,6 @@
           const K_wheel_lat = (1 / compliance_lat); 
           const K_wheel_rad = (1 / compliance_rad); 
 
-          // 6. Strength & Buckling Approximations (Defensible Limits)
-          // Lower-bound force required to completely detension the weakest spoke
           const local_rad_nds = k_axial_nds * cos2_nds; 
           const Frad_N = T_nds_N * K_wheel_rad / local_rad_nds;
 
@@ -137,15 +126,12 @@
           };
         }
 
-        // ── CHRIS KING PRESETS ────────────────────────────────────────────────────────
+        // ── CHRIS KING PRESETS (Rear Only) ────────────────────────────────────────────
         const PRESETS = [
           { id:'r142', short:'ISO 135/142', name:'CK ISO 135/142 Rear',    OLD:142, type:'rear',  d_ds:20.1, d_nds:33.9, pcd_ds:57.4, pcd_nds:57.4 },
           { id:'r148', short:'Boost 148',   name:'CK Boost 148×12 Rear',     OLD:148, type:'rear',  d_ds:24.0, d_nds:36.3, pcd_ds:57.4, pcd_nds:57.4 },
           { id:'r157', short:'Superbst 157',name:'CK Superboost 157×12 Rear',OLD:157, type:'rear',  d_ds:28.8, d_nds:40.3, pcd_ds:57.4, pcd_nds:57.4 },
           { id:'r157b',short:'DH G2 157',   name:'CK DH G2 150/157 Rear',    OLD:157, type:'rear',  d_ds:28.5, d_nds:39.6, pcd_ds:57.4, pcd_nds:57.4 },
-          { id:'f100', short:'R45D 100F',   name:'CK R45D CL Front 100×12',  OLD:100, type:'front', d_ds:30.6, d_nds:22.3, pcd_ds:57.4, pcd_nds:57.4 },
-          { id:'f110a',short:'Boost 6B 110F',name:'CK Boost 6-Bolt Front 110×15',OLD:110,type:'front',d_ds:36.3,d_nds:27.3,pcd_ds:57.4,pcd_nds:57.4 },
-          { id:'f110b',short:'Boost CL 110F',name:'CK Boost CL Front 110×15', OLD:110, type:'front', d_ds:35.5, d_nds:27.5, pcd_ds:57.4, pcd_nds:57.4 },
         ];
 
         // ── COLOURS ───────────────────────────────────────────────────────────────────
@@ -158,24 +144,20 @@
         };
 
         // ── CROSS-SECTION SVG ─────────────────────────────────────────────────────────
-        function CrossSection({ hub_d_ds, hub_d_nds, pcd_ds, pcd_nds, OLD, type, width=320, compact=false, rimOffset=0 }) {
+        function CrossSection({ hub_d_ds, hub_d_nds, pcd_ds, pcd_nds, OLD, width=320, compact=false, rimOffset=0 }) {
           const H   = compact ? 110 : 160;
           const CX  = width / 2;
           const AY  = compact ? 44 : 62;
           const FH  = compact ? 16 : 26;
-          // Scale drawing based on physical hub size
           const SC  = Math.min(width / (Math.max(OLD || (hub_d_ds+hub_d_nds+40), 80) + 20), 1.6);
 
-          // Hub flanges stay physically static in the drawing
           const dx  = CX + hub_d_ds  * SC;
           const nx  = CX - hub_d_nds * SC;
           const rx  = OLD ? CX + (OLD/2)*SC : dx + 10;
           const lx  = OLD ? CX - (OLD/2)*SC : nx - 10;
           
-          // Rim shifts visually relative to the hub
           const rimVisualX = CX + rimOffset * SC;
 
-          // Effective geometric distances for the labels
           const effective_ds = hub_d_ds - rimOffset;
           const effective_nds = hub_d_nds + rimOffset;
           const gid = `g${Math.random().toString(36).slice(2,7)}`;
@@ -225,13 +207,13 @@
               <line x1={nx} y1={AY+FH+2} x2={nx} y2={AY+FH+8} stroke="#3b82f6" strokeWidth={1}/>
               <line x1={rimVisualX} y1={AY+FH+2} x2={rimVisualX} y2={AY+FH+8} stroke="#3b82f6" strokeWidth={1}/>
               <text x={(nx+rimVisualX)/2} y={AY+FH+17} textAnchor="middle" fill="#60a5fa" fontSize={compact?8:9} fontFamily="monospace">
-                {type==='rear'?'NDS':'L'} {effective_nds.toFixed(1)}
+                NDS {effective_nds.toFixed(1)}
               </text>
 
               <line x1={rimVisualX}  y1={AY+FH+5} x2={dx} y2={AY+FH+5} stroke="#f59e0b" strokeWidth={1}/>
               <line x1={dx}  y1={AY+FH+2} x2={dx} y2={AY+FH+8} stroke="#f59e0b" strokeWidth={1}/>
               <text x={(rimVisualX+dx)/2} y={AY+FH+17} textAnchor="middle" fill="#fbbf24" fontSize={compact?8:9} fontFamily="monospace">
-                {type==='rear'?'DS':'R'} {effective_ds.toFixed(1)}
+                DS {effective_ds.toFixed(1)}
               </text>
 
               {!compact &&
@@ -306,11 +288,8 @@
 
           const getAdjustedFlanges = (hub) => {
             if (!offsetRim) return { d_ds_adj: hub.d_ds, d_nds_adj: hub.d_nds };
-            if (hub.type === 'rear') {
-              return { d_ds_adj: hub.d_ds + 3.0, d_nds_adj: hub.d_nds - 3.0 };
-            } else {
-              return { d_ds_adj: hub.d_ds - 3.0, d_nds_adj: hub.d_nds + 3.0 };
-            }
+            // All hubs are now rear hubs
+            return { d_ds_adj: hub.d_ds + 3.0, d_nds_adj: hub.d_nds - 3.0 };
           };
 
           const { d_ds_adj, d_nds_adj } = getAdjustedFlanges(activeBaseHub);
@@ -324,7 +303,7 @@
           const chartData = useMemo(() => {
             const allM = PRESETS.map(p => {
               const adjusted = offsetRim 
-                ? (p.type === 'rear' ? { d: p.d_ds + 3.0, n: p.d_nds - 3.0 } : { d: p.d_ds - 3.0, n: p.d_nds + 3.0 })
+                ? { d: p.d_ds + 3.0, n: p.d_nds - 3.0 }
                 : { d: p.d_ds, n: p.d_nds };
 
               return {
@@ -373,7 +352,7 @@
                   Chris King MTB Hubs · Wheel Engineering Analysis · Mode Matrix Model (Ford 2018)
                 </div>
                 <h1 style={{fontSize:20,fontWeight:300,margin:'0 0 4px',letterSpacing:2,color:'#f1f5f9'}}>
-                  HUB STANDARDS &amp; WHEEL STRENGTH
+                  REAR HUB STANDARDS &amp; WHEEL STRENGTH
                 </h1>
                 <p style={{margin:0,color:'#2d4a6a',fontSize:10}}>
                   Interactive: adjust hub geometry, wheel size, tension &amp; spoke count · Live recalculation
@@ -425,7 +404,7 @@
                   </div>
 
                   <div>
-                    <div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:6}}>RIM BED CONFIG</div>
+                    <div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:6}}>3MM OFFSET RIM APPROXIMATION</div>
                     <button onClick={() => setOffsetRim(!offsetRim)} style={{
                       background: offsetRim ? '#166534' : '#0a1620',
                       border: `1px solid ${offsetRim ? '#22c55e' : BDR}`,
@@ -433,7 +412,7 @@
                       cursor: 'pointer', padding: '6px 12px', fontFamily: 'monospace', fontSize: 9, borderRadius: 2,
                       width: '100%', fontWeight: offsetRim ? 'bold' : 'normal', textAlign: 'center', transition: 'all 0.15s'
                     }}>
-                      {offsetRim ? '✓ 3mm Offset Enabled' : 'Symmetrical Rim'}
+                      {offsetRim ? '✓ Enabled' : 'Disabled'}
                     </button>
                   </div>
 
@@ -483,18 +462,18 @@
                       <div style={{background:CARD,border:`1px solid ${BDR}`,borderRadius:3,padding:16}}>
                         <div style={{fontSize:9,color:'#3b82f6',letterSpacing:2,marginBottom:8}}>ACTIVE HUB — LIVE GEOMETRY</div>
                         <div style={{fontFamily:'monospace',fontSize:11,color:'#5a80a0',marginBottom:12}}>
-                          {activeBaseHub.name}
+                          {activeBaseHub.name} {offsetRim ? '(Calculated with 3mm Asymmetric Offset)' : ''}
                         </div>
                         <CrossSection 
                           hub_d_ds={activeBaseHub.d_ds} hub_d_nds={activeBaseHub.d_nds}
                           pcd_ds={activeBaseHub.pcd_ds} pcd_nds={activeBaseHub.pcd_nds}
                           OLD={activeBaseHub.OLD} type={activeBaseHub.type} width={380} 
-                          rimOffset={offsetRim ? (activeBaseHub.type === 'rear' ? -3.0 : 3.0) : 0}
+                          rimOffset={offsetRim ? -3.0 : 0}
                         />
                         <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginTop:14}}>
                           <MetricCard label="TENSION SYMMETRY" value={m.symmetry_pct} unit="%" color={rc}/>
                           <MetricCard label="FLANGE SPAN" value={m.ftf} unit="mm" color="#38bdf8"/>
-                          <MetricCard label="NDS TENSION" value={m.t_nds} unit="kgf" color={activeBaseHub.type==='front'?'#f87171':'#a78bfa'} sub={activeBaseHub.type==='front'?'Warning: > 100kgf max':''}/>
+                          <MetricCard label="NDS TENSION" value={m.t_nds} unit="kgf" color="#a78bfa" />
                         </div>
                         <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8,marginTop:8}}>
                           <MetricCard label="β DS BRACING" value={m.beta_ds} unit="deg" color="#fbbf24"/>
@@ -528,7 +507,7 @@
                           <div style={{fontSize:10,color:'#2d4a6a',lineHeight:1.8}}>
                             <div>Wheel: <span style={{color:'#60a5fa'}}>{WHEELS_SIZES_LOCAL[wheelKey].label}</span> · ERD {erd}mm</div>
                             <div>Spokes: <span style={{color:'#60a5fa'}}>{nSpokes}H · 3-cross · 2.0mm steel</span></div>
-                            <div>Effective Center-to-Flange: {activeBaseHub.type==='rear'?'DS':'R'} <span style={{color:'#fbbf24'}}>{d_ds_adj.toFixed(1)}mm</span> | {activeBaseHub.type==='rear'?'NDS':'L'} <span style={{color:'#60a5fa'}}>{d_nds_adj.toFixed(1)}mm</span></div>
+                            <div>Effective Center-to-Flange: DS <span style={{color:'#fbbf24'}}>{d_ds_adj.toFixed(1)}mm</span> | NDS <span style={{color:'#60a5fa'}}>{d_nds_adj.toFixed(1)}mm</span></div>
                           </div>
                         </div>
                       </div>
@@ -536,15 +515,15 @@
 
                     <div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:8}}>ALL REAR MTB PRESETS — comparison matrix view</div>
                     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))',gap:8,marginBottom:16}}>
-                      {chartData.filter(p=>p.type=='rear' || p.id=='custom').map(p => (
+                      {chartData.map(p => (
                         <div key={p.id} onClick={()=>{if(p.id!=='custom'){setPresetId(p.id);setCustom(false);}}}
                           style={{background:CARD,border:`1px solid ${p.isActive?'#3b82f6':BDR}`,borderRadius:3,padding:'8px 4px',cursor:p.id==='custom'?'default':'pointer'}}>
                           <div style={{fontFamily:'monospace',fontSize:8,color:p.isActive?'#60a5fa':'#3d5a80',textAlign:'center',marginBottom:3}}>{p.short}</div>
                           <CrossSection 
                             hub_d_ds={p.d_ds} hub_d_nds={p.d_nds} 
                             pcd_ds={p.pcd_ds} pcd_nds={p.pcd_nds} 
-                            OLD={p.OLD} type={p.type} width={200} compact 
-                            rimOffset={offsetRim ? (p.type === 'rear' ? -3.0 : 3.0) : 0}
+                            OLD={p.OLD} width={200} compact 
+                            rimOffset={offsetRim ? -3.0 : 0}
                           />
                           <div style={{padding:'3px 8px',display:'flex',justifyContent:'space-between'}}>
                             <span style={{fontSize:8,color:'#2d4a6a'}}>Symmetry</span>
@@ -632,8 +611,7 @@
                     <table style={{width:'100%',borderCollapse:'collapse',fontSize:10,textAlign:'left'}}>
                       <thead>
                         <tr style={{borderBottom:`1px solid ${BDR}`,color:'#5a80a0'}}>
-                          <th style={{padding:6}}>Hub Standard Variant</th>
-                          <th style={{padding:6}}>Type</th>
+                          <th style={{padding:6}}>Rear Hub Standard</th>
                           <th style={{padding:6}}>Effective d_DS</th>
                           <th style={{padding:6}}>Effective d_NDS</th>
                           <th style={{padding:6}}>Symmetry</th>
@@ -645,7 +623,6 @@
                         {chartData.map(h => (
                           <tr key={h.id} style={{borderBottom:'1px solid #0d1826',background:h.isActive?'#0d1e33':'transparent'}}>
                             <td style={{padding:6,fontWeight:h.isActive?'bold':'normal'}}>{h.name}</td>
-                            <td style={{padding:6,textTransform:'uppercase'}}>{h.type}</td>
                             <td style={{padding:6,color:'#fbbf24'}}>{h.d_ds_display.toFixed(1)}mm</td>
                             <td style={{padding:6,color:'#60a5fa'}}>{h.d_nds_display.toFixed(1)}mm</td>
                             <td style={{padding:6,color:symCol(h.symmetry_pct),fontWeight:'bold'}}>{h.symmetry_pct}%</td>
