@@ -22,10 +22,10 @@
 
     <!-- Render the component to the screen -->
     <script type="text/babel">
-        // This assumes Claude named the main component 'HubAnalysis'
-        // If it throws an error, we might need to check the exact component name at the bottom of HubAnalysis.jsx
         const Root = () => {
-            return <calcWheel />;
+            // Capitalize the C so React recognizes it as a component
+            const CalcWheelComponent = calcWheel;
+            return <CalcWheelComponent />;
         };
         
         const root = ReactDOM.createRoot(document.getElementById('root'));
