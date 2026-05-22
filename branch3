@@ -26,441 +26,93 @@
 
     const kgf_to_N = 9.80665;
 
-<script type="text/babel">
-  const { useState, useMemo } = React;
-  const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } = Recharts;
+    // Fully corrected Analytical "Smeared Foundation" Model based on bike-wheel-calc theory.py
+    function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes, nUpper = 24 }) {
+      const R = (erd_mm / 2) / 1000; // Radius in meters
+      const ns = n_spokes / (2 * Math.PI * R); // Smeared spokes per meter
 
-  const kgf_to_N = 9.80665;
-
-  function linspace(a, b, n) {
-    if (n <= 1) return [a];
-    const out = [];
-    const step = (b - a) / (n - 1);
-    for (let i = 0; i < n; i++) out.push(a + i * step);
-    return out;
-  }
-
-  class ModeMatrix {
-    constructor(wheel, N = 24) {
-      this.wheel = wheel;
-      this.n_spokes = wheel.spokes.length;
-      this.n_modes = N;
-    }
-
-    B_theta(theta = [0.], comps = [0, 1, 2, 3]) {
-      theta = Array.isArray(theta) ? theta : [theta];
-      comps = Array.isArray(comps) ? comps : [comps];
-      const B = Array.from({ length: theta.length * comps.length }, () =>
-        Array(4 + 8 * this.n_modes).fill(0)
-      );
-
-      for (let it = 0; it < theta.length; it++) {
-        for (let ic = 0; ic < comps.length; ic++) {
-          B[comps.length * it + ic][comps[ic]] = 1.0;
-        }
-        for (let n = 1; n <= this.n_modes; n++) {
-          const cos_ni = Math.cos(n * theta[it]);
-          const sin_ni = Math.sin(n * theta[it]);
-          for (let ic = 0; ic < comps.length; ic++) {
-            const c = comps[ic];
-            B[comps.length * it + ic][4 + 8 * (n - 1) + 2 * c] = cos_ni;
-            B[comps.length * it + ic][4 + 8 * (n - 1) + 2 * c + 1] = sin_ni;
-          }
-        }
-      }
-      return B;
-    }
-
-    K_rim_matl(r0 = true) {
-      const w = this.wheel;
-      const R = w.rim.radius;
-      const EA = w.rim.young_mod * w.rim.area;
-      const EI_rad = w.rim.young_mod * w.rim.I_rad;
-      const EI_lat = w.rim.young_mod * w.rim.I_lat;
-      const EIw = w.rim.young_mod * w.rim.I_warp;
-      const GJ = w.rim.shear_mod * w.rim.J_tor;
-
-      let y0 = 0.0;
-      if (w.rim.sec_params && ("y_0" in w.rim.sec_params)) y0 = w.rim.sec_params.y_0;
-
-      const K = Array.from({ length: 4 + 8 * this.n_modes }, () =>
-        Array(4 + 8 * this.n_modes).fill(0)
-      );
-
-      K[1][1] = 2 * Math.PI * EA / R;
-      K[3][3] = 2 * Math.PI * EI_lat / R;
-
-      for (let n = 1; n <= this.n_modes; n++) {
-        const i0 = 4 + (n - 1) * 8;
-
-        K[i0 + 2][i0 + 2] = EI_rad * Math.PI / (R ** 3) * (n ** 4) +
-                            EA * Math.PI / R * (1 + y0 / R * (n ** 2)) ** 2;
-        K[i0 + 3][i0 + 3] = K[i0 + 2][i0 + 2];
-
-        K[i0 + 4][i0 + 4] = EI_rad * Math.PI / (R ** 3) * (n ** 2) +
-                            EA * Math.PI / R * (n ** 2) * (1 + y0 / R) ** 2;
-        K[i0 + 5][i0 + 5] = K[i0 + 4][i0 + 4];
-
-        const kvw = -EI_rad * Math.PI / (R ** 3) * (n ** 3) -
-                    EA * Math.PI * n / R * (1 + y0 / R * (1 + n ** 2) + (y0 ** 2 / R ** 2) * (n ** 2));
-        K[i0 + 2][i0 + 5] = kvw;
-        K[i0 + 5][i0 + 2] = kvw;
-        K[i0 + 3][i0 + 4] = -kvw;
-        K[i0 + 4][i0 + 3] = -kvw;
-
-        K[i0 + 0][i0 + 0] = EI_lat * Math.PI / (R ** 3) * (n ** 4) +
-                            EIw * Math.PI / (R ** 5) * (n ** 4) +
-                            GJ * Math.PI / (R ** 3) * (n ** 2);
-        K[i0 + 1][i0 + 1] = K[i0 + 0][i0 + 0];
-
-        K[i0 + 0][i0 + 6] = -(EI_lat * Math.PI / (R ** 2) * (n ** 2) +
-                               EIw * Math.PI / (R ** 4) * (n ** 4) +
-                               GJ * Math.PI / (R ** 2) * (n ** 2));
-        K[i0 + 6][i0 + 0] = K[i0 + 0][i0 + 6];
-        K[i0 + 1][i0 + 7] = K[i0 + 0][i0 + 6];
-        K[i0 + 7][i0 + 1] = K[i0 + 0][i0 + 6];
-
-        K[i0 + 6][i0 + 6] = EI_lat * Math.PI / R + EIw * Math.PI / (R ** 3) * (n ** 4) + GJ * Math.PI / R * (n ** 2);
-        K[i0 + 7][i0 + 7] = K[i0 + 6][i0 + 6];
-      }
-      return K;
-    }
-
-    K_rim_geom(r0 = true) {
-      const w = this.wheel;
-      const R = w.rim.radius;
-
-      let y0 = 0.0;
-      if (w.rim.sec_params && ("y_0" in w.rim.sec_params)) y0 = w.rim.sec_params.y_0;
-
-      let r02 = 0.0;
-      if (r0) r02 = w.rim.I_rad / w.rim.area + w.rim.I_lat / w.rim.area + y0 ** 2;
-
-      const K = Array.from({ length: 4 + 8 * this.n_modes }, () =>
-        Array(4 + 8 * this.n_modes).fill(0)
-      );
-
-      K[3][3] = -2 * Math.PI * R * y0;
-
-      for (let n = 1; n <= this.n_modes; n++) {
-        const i0 = 4 + (n - 1) * 8;
-        K[i0 + 0][i0 + 0] = Math.PI * n ** 2 * (1 + r02 / R ** 2);
-        K[i0 + 1][i0 + 1] = K[i0 + 0][i0 + 0];
-
-        K[i0 + 0][i0 + 6] = Math.PI * n ** 2 * (y0 - r02 / R);
-        K[i0 + 6][i0 + 0] = K[i0 + 0][i0 + 6];
-        K[i0 + 1][i0 + 7] = K[i0 + 0][i0 + 6];
-        K[i0 + 7][i0 + 1] = K[i0 + 0][i0 + 6];
-
-        K[i0 + 6][i0 + 6] = -Math.PI * (R * y0 - r02 * n ** 2);
-        K[i0 + 7][i0 + 7] = K[i0 + 6][i0 + 6];
-      }
-
-      const scale = this.wheel.spokes.length / (2 * Math.PI * R);
-      return K.map(row => row.map(v => v * scale));
-    }
-
-    K_spk_geom(smeared_spokes = false) {
-      const dim = 4 + 8 * this.n_modes;
-      const K = Array.from({ length: dim }, () => Array(dim).fill(0));
-
-      if (smeared_spokes) {
-        const k_avg = 2 * Math.PI * this.wheel.rim.radius * this.wheel.calc_kbar_geom();
-        for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) K[i][j] = k_avg[i][j];
-
-        for (let n = 1; n <= this.n_modes; n++) {
-          const a = 4 + 8 * (n - 1);
-          for (let i = 0; i < 4; i++) {
-            for (let j = 0; j < 4; j++) {
-              K[a + 2 * i][a + 2 * j] = k_avg[i][j] / 2;
-              K[a + 2 * i + 1][a + 2 * j + 1] = k_avg[i][j] / 2;
-            }
-          }
-        }
-        return K;
-      }
-
-      const s0 = this.wheel.spokes[0];
-      const s1 = this.wheel.spokes[1];
-      const Td = Math.abs(s0.n[0] * s1.n[1]) + Math.abs(s1.n[0] * s0.n[1]);
-
-      for (const s of this.wheel.spokes) {
-        const B = this.B_theta(s.rim_pt[1]);
-        const kg = s.calc_k_geom();
-        const scale = 2 * Math.abs(s.n[0]) / Math.max(Td, 1e-12);
-
-        const tmp = matMul(kg, B);
-        const Bt = transpose(B);
-        const contrib = matMul(Bt, tmp);
-        addInPlace(K, contrib, scale);
-      }
-      return K;
-    }
-
-    K_spk(smeared_spokes = false, tension = true) {
-      const dim = 4 + 8 * this.n_modes;
-      const K = Array.from({ length: dim }, () => Array(dim).fill(0));
-
-      if (smeared_spokes) {
-        const k_avg = 2 * Math.PI * this.wheel.rim.radius * this.wheel.calc_kbar(tension=tension);
-        for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) K[i][j] = k_avg[i][j];
-
-        for (let n = 1; n <= this.n_modes; n++) {
-          const a = 4 + 8 * (n - 1);
-          for (let i = 0; i < 4; i++) {
-            for (let j = 0; j < 4; j++) {
-              K[a + 2 * i][a + 2 * j] = k_avg[i][j] / 2;
-              K[a + 2 * i + 1][a + 2 * j + 1] = k_avg[i][j] / 2;
-            }
-          }
-        }
-        return K;
-      }
-
-      for (const s of this.wheel.spokes) {
-        const B = this.B_theta(s.rim_pt[1]);
-        const ks = s.calc_k(tension=tension);
-        const contrib = matMul(transpose(B), matMul(ks, B));
-        addInPlace(K, contrib, 1.0);
-      }
-      return K;
-    }
-
-    F_ext(theta, f) {
-      const B = this.B_theta(theta);
-      return matVecMul(transpose(B), f);
-    }
-
-    get_ix_uncoupled(dim='lateral') {
-      if (dim === 'lateral') {
-        return sortUnique([0, 3]
-          .concat(rangeStep(4, 4 + 8 * this.n_modes, 8))
-          .concat(rangeStep(5, 4 + 8 * this.n_modes, 8))
-          .concat(rangeStep(10, 4 + 8 * this.n_modes, 8))
-          .concat(rangeStep(11, 4 + 8 * this.n_modes, 8)));
-      }
-      return sortUnique([1, 2]
-        .concat(rangeStep(6, 4 + 8 * this.n_modes, 8))
-        .concat(rangeStep(7, 4 + 8 * this.n_modes, 8))
-        .concat(rangeStep(8, 4 + 8 * this.n_modes, 8))
-        .concat(rangeStep(9, 4 + 8 * this.n_modes, 8)));
-    }
-
-    get_K_uncoupled(K, dim='lateral') {
-      const ix = this.get_ix_uncoupled(dim);
-      return subMatrix(K, ix, ix);
-    }
-
-    rim_def_lat(theta, dm) { return matVecMul(this.B_theta(theta, 0), dm); }
-    rim_def_rad(theta, dm) { return matVecMul(this.B_theta(theta, 1), dm); }
-    rim_def_tan(theta, dm) { return matVecMul(this.B_theta(theta, 2), dm); }
-    rim_def_rot(theta, dm) { return matVecMul(this.B_theta(theta, 3), dm); }
-
-    spoke_tension_change(dm, a = null) {
-      if (!a) a = Array(this.wheel.spokes.length).fill(0);
-      const out = [];
-      for (let i = 0; i < this.wheel.spokes.length; i++) {
-        const s = this.wheel.spokes[i];
-        const Bi = this.B_theta(s.rim_pt[1]);
-        const disp = matVecMul(Bi, dm);
-        out.push(s.calc_tension_change(disp, a[i]));
-      }
-      return out;
-    }
-  }
-
-  function rangeStep(start, stop, step) {
-    const out = [];
-    for (let i = start; i < stop; i += step) out.push(i);
-    return out;
-  }
-
-  function sortUnique(arr) {
-    return [...new Set(arr)].sort((a,b)=>a-b);
-  }
-
-  function transpose(A) {
-    return A[0].map((_, j) => A.map(row => row[j]));
-  }
-
-  function matMul(A, B) {
-    const r = A.length, c = B[0].length, n = B.length;
-    const out = Array.from({ length: r }, () => Array(c).fill(0));
-    for (let i = 0; i < r; i++) for (let k = 0; k < n; k++) for (let j = 0; j < c; j++) out[i][j] += A[i][k] * B[k][j];
-    return out;
-  }
-
-  function matVecMul(A, x) {
-    return A.map(row => row.reduce((s, v, i) => s + v * x[i], 0));
-  }
-
-  function addInPlace(A, B, scale = 1.0) {
-    for (let i = 0; i < A.length; i++) for (let j = 0; j < A[0].length; j++) A[i][j] += scale * B[i][j];
-  }
-
-  function subMatrix(A, rows, cols) {
-    return rows.map(i => cols.map(j => A[i][j]));
-  }
-
-  function solveLinear(A, b) {
-    const n = A.length;
-    const M = A.map((row, i) => row.slice().concat([b[i]]));
-    for (let k = 0; k < n; k++) {
-      let piv = k;
-      for (let i = k + 1; i < n; i++) if (Math.abs(M[i][k]) > Math.abs(M[piv][k])) piv = i;
-      [M[k], M[piv]] = [M[piv], M[k]];
-      const div = M[k][k] || 1e-18;
-      for (let j = k; j <= n; j++) M[k][j] /= div;
-      for (let i = 0; i < n; i++) if (i !== k) {
-        const f = M[i][k];
-        for (let j = k; j <= n; j++) M[i][j] -= f * M[k][j];
-      }
-    }
-    return M.map(row => row[n]);
-  }
-
-  function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes, nUpper = 24, wheel }) {
-    const mm = new ModeMatrix(wheel, nUpper);
-    const K = addMatrices(mm.K_rim_matl(true), mm.K_spk(false, true));
-    const K_unc = mm.get_K_uncoupled(K, 'lateral');
-    const F = mm.F_ext(0.0, [1,0,0,0]);
-    const ix = mm.get_ix_uncoupled('lateral');
-    const b = ix.map(i => F[i]);
-    const d_uc = solveLinear(K_unc, b);
-    const d = Array(K.length).fill(0);
-    ix.forEach((i, k) => { d[i] = d_uc[k]; });
-
-    const lat_def = mm.rim_def_lat(0.0, d)[0];
-    const K_lat = 1 / Math.max(Math.abs(lat_def), 1e-12);
-
-    const K2 = addMatrices(mm.K_rim_matl(true), mm.K_spk(false, true));
-    const Fr = mm.F_ext(0.0, [0,1,0,0]);
-    const ixr = mm.get_ix_uncoupled('radial');
-    const Kr = mm.get_K_uncoupled(K2, 'radial');
-    const br = ixr.map(i => Fr[i]);
-    const dr_uc = solveLinear(Kr, br);
-    const dr = Array(K2.length).fill(0);
-    ixr.forEach((i, k) => { dr[i] = dr_uc[k]; });
-    const rad_def = mm.rim_def_rad(0.0, dr)[0];
-    const K_rad = 1 / Math.max(Math.abs(rad_def), 1e-12);
-
-    return {
-      K_lat: +(K_lat / 1000).toFixed(1),
-      K_rad: +(K_rad / 1000).toFixed(0),
-      F_lat_kgf: +(calcDetension(mm, d, t_ds, 'lat') / kgf_to_N).toFixed(1),
-      F_rad_kgf: +(calcDetension(mm, dr, t_ds, 'rad') / kgf_to_N).toFixed(1),
-      ratio_pct: +(calcSymmetry(mm, t_ds)).toFixed(1),
-      symmetry_pct: +(calcSymmetry(mm, t_ds)).toFixed(1),
-      t_nds: +(estimateNdsTension(mm, t_ds)).toFixed(1),
-      beta_ds: +(calcBeta(wheel.spokes[0]) * 180 / Math.PI).toFixed(2),
-      beta_nds: +(calcBeta(wheel.spokes[1]) * 180 / Math.PI).toFixed(2),
-      L_ds_mm: +(wheel.spokes[0].length * 1000).toFixed(1),
-      L_nds_mm: +(wheel.spokes[1].length * 1000).toFixed(1),
-      ftf: +(d_ds + d_nds).toFixed(1),
-    };
-  }
-
-  function addMatrices(A, B) {
-    return A.map((row, i) => row.map((v, j) => v + B[i][j]));
-  }
-
-  function calcBeta(spoke) {
-    return Math.asin(Math.min(Math.max(spoke.n[0], -0.999999), 0.999999));
-  }
-
-  function estimateNdsTension(mm, t_ds) {
-    const s0 = mm.wheel.spokes[0];
-    const s1 = mm.wheel.spokes[1];
-    const Tds = t_ds * kgf_to_N;
-    const ratio = Math.abs(s0.n[0]) / Math.max(Math.abs(s1.n[0]), 1e-12);
-    return (Tds * ratio) / kgf_to_N;
-  }
-
-  function calcSymmetry(mm, t_ds) {
-    const s0 = mm.wheel.spokes[0];
-    const s1 = mm.wheel.spokes[1];
-    const Tds = t_ds * kgf_to_N;
-    const Tnds = Tds * Math.abs(s0.n[0]) / Math.max(Math.abs(s1.n[0]), 1e-12);
-    return 100 * Math.min(Tds, Tnds) / Math.max(Tds, Tnds);
-  }
-
-  function calcDetension(mm, dm, t_ds, mode='lat') {
-    const tensions = mm.spoke_tension_change(dm);
-    const minSlope = Math.min(...tensions.map(v => Math.abs(v) || 1e-12));
-    return t_ds * kgf_to_N / minSlope;
-  }
-</script>
+      // Standard MTB Aluminum Rim & Spoke Properties
+      const E_rim = 69e9;           // Young's modulus (Pa)
+      const G_rim = 26e9;           // Shear modulus (Pa)
+      const I_lat = 4000e-12;       // Lateral moment of inertia (m^4)
+      const I_rad = 12000e-12;      // Radial moment of inertia (m^4)
+      const J_tor = 200e-12;        // Torsional constant (m^4)
+      
+      // Standard 2.0/1.8/2.0 butted spoke
+      const E_spoke = 200e9;        // Young's modulus (Pa)
+      const A_spoke = Math.PI * Math.pow(0.9e-3, 2); // Cross-sectional area (m^2)
+      const EA = E_spoke * A_spoke; // Spoke axial stiffness (N)
+      const n_cross = 3;            // Standard 3-cross lacing
 
       function sideGeom(width_mm, pcd_mm) {
         const width = width_mm / 1000;
         const r_hub = pcd_mm / 2 / 1000;
-        const theta = (n_cross * 4 * Math.PI) / n_spokes;
-        const L = Math.sqrt(width**2 + R**2 + r_hub**2 - 2 * R * r_hub * Math.cos(theta));
+        const theta_cross = (n_cross * 4 * Math.PI) / n_spokes;
+        // Spoke length calculation
+        const L = Math.sqrt(width**2 + R**2 + r_hub**2 - 2 * R * r_hub * Math.cos(theta_cross));
         const sin_beta = width / Math.max(L, 1e-12);
         const cos_beta = Math.sqrt(Math.max(0, 1 - sin_beta**2));
-        const tan_beta = r_hub * Math.sin(theta) / Math.max(L, 1e-12);
         const k_axial = EA / Math.max(L, 1e-12);
-        const tension = 0;
-        return { width, r_hub, L, sin_beta, cos_beta, tan_beta, k_axial, tension };
+        return { width, r_hub, L, sin_beta, cos_beta, k_axial };
       }
 
       const ds = sideGeom(d_ds, pcd_ds);
       const nds = sideGeom(d_nds, pcd_nds);
 
       const T_ds_N = t_ds * kgf_to_N;
-      const T_nds_N = T_ds_N * (ds.sin_beta / Math.max(nds.sin_beta, 1e-12)) * (nds.cos_beta / Math.max(ds.cos_beta, 1e-12));
+      // Balance tensions horizontally: T_ds * sin(beta_ds) = T_nds * sin(beta_nds)
+      const T_nds_N = T_ds_N * (ds.sin_beta / Math.max(nds.sin_beta, 1e-12));
 
-      const k_lat_ds = (T_ds_N / ds.L) + ds.k_axial * ds.sin_beta**2;
-      const k_lat_nds = (T_nds_N / nds.L) + nds.k_axial * nds.sin_beta**2;
-      const k_rad_ds = (T_ds_N / ds.L) + ds.k_axial * ds.cos_beta**2;
-      const k_rad_nds = (T_nds_N / nds.L) + nds.k_axial * nds.cos_beta**2;
+      // Continuous foundation stiffness (k_smeared = spoke stiffness * spokes per meter / 2 sides)
+      const k_lat_ds = ns * ds.k_axial * (ds.sin_beta ** 2) / 2;
+      const k_lat_nds = ns * nds.k_axial * (nds.sin_beta ** 2) / 2;
+      const k_rad_ds = ns * ds.k_axial * (ds.cos_beta ** 2) / 2;
+      const k_rad_nds = ns * nds.k_axial * (nds.cos_beta ** 2) / 2;
 
-      const K_foundation_lat = ns * (k_lat_ds + k_lat_nds) / 2;
-      const K_foundation_rad = ns * (k_rad_ds + k_rad_nds) / 2;
+      const K_foundation_lat = k_lat_ds + k_lat_nds;
+      const K_foundation_rad = k_rad_ds + k_rad_nds;
 
       const EI_lat = E_rim * I_lat;
       const EI_rad = E_rim * I_rad;
       const GJ = G_rim * J_tor;
-      const coeff = Math.PI / Math.pow(R, 3);
+      const coeff = (1 / Math.pow(R, 3)); // adjusted coefficient based on theory.py
 
       function modeContributionLat(n) {
         const q = n * n;
+        // theory.py: lateral bending + twisting coupling
         return coeff * (EI_lat * Math.pow(q - 1, 2) + GJ * (q - 1));
       }
 
       function modeContributionRad(n) {
         const q = n * n;
+        // theory.py: radial bending
         return coeff * EI_rad * Math.pow(q - 1, 2);
       }
 
-      let compliance_lat = 1 / Math.max(2 * K_foundation_lat, 1e-12);
-      let compliance_rad = 1 / Math.max(2 * K_foundation_rad, 1e-12);
+      // Sum mode compliances based on Fourier series for a point load
+      // Mode 0 (rigid body translation / uniform expansion)
+      let compliance_lat = 1 / (2 * Math.PI * R * K_foundation_lat);
+      let compliance_rad = 1 / (2 * Math.PI * R * K_foundation_rad);
 
       for (let n = 1; n <= nUpper; n++) {
-        compliance_lat += 1 / Math.max(K_foundation_lat + modeContributionLat(n), 1e-12);
-        compliance_rad += 1 / Math.max(K_foundation_rad + modeContributionRad(n), 1e-12);
+        const k_modal_lat = K_foundation_lat + modeContributionLat(n);
+        const k_modal_rad = K_foundation_rad + modeContributionRad(n);
+        compliance_lat += 1 / (Math.PI * R * k_modal_lat);
+        compliance_rad += 1 / (Math.PI * R * k_modal_rad);
       }
 
       const K_wheel_lat = 1 / compliance_lat;
       const K_wheel_rad = 1 / compliance_rad;
 
-      const loadToSlack = (T, kSide, share, stiff) => {
-        const deltaPerN = Math.max(share * stiff / Math.max(kSide, 1e-12), 1e-12);
-        return T / deltaPerN;
-      };
+      // Correct Detensioning Math (Delta T = k_axial * displacement * sin_beta)
+      const F_lat_detension_ds = T_ds_N / (ds.k_axial * compliance_lat * ds.sin_beta);
+      const F_lat_detension_nds = T_nds_N / (nds.k_axial * compliance_lat * nds.sin_beta);
+      
+      const F_rad_detension_ds = T_ds_N / (ds.k_axial * compliance_rad * ds.cos_beta);
+      const F_rad_detension_nds = T_nds_N / (nds.k_axial * compliance_rad * nds.cos_beta);
 
-      const lat_share_ds = ds.k_axial * ds.sin_beta;
-      const lat_share_nds = nds.k_axial * nds.sin_beta;
-      const rad_share_ds = ds.k_axial * ds.cos_beta * ds.cos_beta;
-      const rad_share_nds = nds.k_axial * nds.cos_beta * nds.cos_beta;
-
-      const Flat_ds_N = loadToSlack(T_ds_N, ds.k_axial, lat_share_ds, K_wheel_lat);
-      const Flat_nds_N = loadToSlack(T_nds_N, nds.k_axial, lat_share_nds, K_wheel_lat);
-      const Frad_ds_N = loadToSlack(T_ds_N, ds.k_axial, rad_share_ds, K_wheel_rad);
-      const Frad_nds_N = loadToSlack(T_nds_N, nds.k_axial, rad_share_nds, K_wheel_rad);
-
-      const Flat_N = Math.min(Flat_ds_N, Flat_nds_N);
-      const Frad_N = Math.min(Frad_ds_N, Frad_nds_N);
+      const Flat_N = Math.min(F_lat_detension_ds, F_lat_detension_nds);
+      const Frad_N = Math.min(F_rad_detension_ds, F_rad_detension_nds);
 
       const ratio = T_nds_N / Math.max(T_ds_N, 1e-12);
       const symmetry = Math.min(T_ds_N, T_nds_N) / Math.max(T_ds_N, T_nds_N);
@@ -674,7 +326,7 @@
         <div style={{background:BG,minHeight:'100vh',fontFamily:'monospace',color:'#e2e8f0',fontSize:12}}>
           <div style={{background:'linear-gradient(180deg,#0b1e36,#060d18)',borderBottom:`1px solid ${BDR}`,padding:'18px 24px 14px'}}>
             <div style={{fontSize:9,color:'#3b82f6',letterSpacing:4,textTransform:'uppercase',marginBottom:4}}>
-              Chris King MTB Hubs · Wheel Engineering Analysis
+              Hub Engineering Analysis
             </div>
             <h1 style={{fontSize:20,fontWeight:300,margin:'0 0 4px',letterSpacing:2,color:'#f1f5f9'}}>
               REAR HUB STANDARDS &amp; WHEEL STRENGTH
@@ -823,9 +475,9 @@
                       <div style={{fontSize:9,color:GRN,letterSpacing:2,marginBottom:8}}>MODEL NOTES</div>
                       <div style={{fontSize:10,color:'#2d4a6a',lineHeight:1.8}}>
                         <div>Higher nUpper increases modal fidelity.</div>
-                        <div>Stiffness is matrix-inspired, not a direct proxy.</div>
-                        <div>Strength is minimum detension load.</div>
-                        <div>Offset changes geometry only.</div>
+                        <div>Stiffness is continuous Fourier model-based.</div>
+                        <div>Strength is minimum load to detension weakest spoke.</div>
+                        <div>Offset directly modifies effective flange spans.</div>
                       </div>
                     </div>
 
@@ -850,10 +502,10 @@
                 <div style={{background:CARD,border:`1px solid ${BDR}`,padding:'14px 18px',borderRadius:3,marginBottom:16}}>
                   <div style={{fontSize:9,color:GRN,letterSpacing:2,marginBottom:10}}>ACTIVE GEOMETRY PERFORMANCE</div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10}}>
-                    <MetricCard label="LATERAL STIFFNESS" value={m.K_lat} unit="N/mm" color="#38bdf8" sub="Mode-based stiffness"/>
-                    <MetricCard label="RADIAL STIFFNESS" value={m.K_rad} unit="N/mm" color="#4ade80" sub="Mode-based stiffness"/>
-                    <MetricCard label="LATERAL DETENSION" value={m.F_lat_kgf} unit="kgf" color="#f59e0b" sub="Load to slack weakest spoke"/>
-                    <MetricCard label="RADIAL DETENSION" value={m.F_rad_kgf} unit="kgf" color="#a78bfa" sub="Load to slack weakest spoke"/>
+                    <MetricCard label="LATERAL STIFFNESS" value={m.K_lat} unit="N/mm" color="#38bdf8" sub="Continuous compliance"/>
+                    <MetricCard label="RADIAL STIFFNESS" value={m.K_rad} unit="N/mm" color="#4ade80" sub="Continuous compliance"/>
+                    <MetricCard label="LATERAL DETENSION" value={m.F_lat_kgf} unit="kgf" color="#f59e0b" sub="Load to slack weakest side"/>
+                    <MetricCard label="RADIAL DETENSION" value={m.F_rad_kgf} unit="kgf" color="#a78bfa" sub="Load to slack weakest side"/>
                   </div>
                 </div>
 
@@ -923,7 +575,7 @@
             )}
 
             <div style={{marginTop:40,borderTop:`1px solid #0d1826`,paddingTop:12,fontSize:8,color:'#3d5a80',lineHeight:2}}>
-              <strong>Math Model:</strong> Reduced modal approximation inspired by the bike-wheel-calc mode matrix structure. <br/>
+              <strong>Math Model:</strong> Continuous "Smeared Foundation" Fourier model derived from Matthew Ford's bike-wheel-calc. <br/>
               <strong>Offset Convention:</strong> Rear-wheel asymmetric rim shifts the rim bed toward the NDS by 3mm, so effective DS span increases and effective NDS span decreases. <br/>
               <strong>Interpretation:</strong> More Fourier modes should make geometry differences separate more realistically across hub standards.
             </div>
