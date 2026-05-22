@@ -26,21 +26,370 @@
 
     const kgf_to_N = 9.80665;
 
-    function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes, nUpper = 24 }) {
-      const E_spoke = 210e9;
-      const d_spoke = 2.0e-3;
-      const A_spoke = Math.PI * Math.pow(d_spoke / 2, 2);
-      const EA = E_spoke * A_spoke;
+<script type="text/babel">
+  const { useState, useMemo } = React;
+  const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } = Recharts;
 
-      const E_rim = 69e9;
-      const G_rim = 26e9;
-      const I_lat = 1500e-12;
-      const I_rad = 3000e-12;
-      const J_tor = 500e-12;
+  const kgf_to_N = 9.80665;
 
-      const R = erd_mm / 2 / 1000;
-      const n_cross = 3;
-      const ns = n_spokes / 2;
+  function linspace(a, b, n) {
+    if (n <= 1) return [a];
+    const out = [];
+    const step = (b - a) / (n - 1);
+    for (let i = 0; i < n; i++) out.push(a + i * step);
+    return out;
+  }
+
+  class ModeMatrix {
+    constructor(wheel, N = 24) {
+      this.wheel = wheel;
+      this.n_spokes = wheel.spokes.length;
+      this.n_modes = N;
+    }
+
+    B_theta(theta = [0.], comps = [0, 1, 2, 3]) {
+      theta = Array.isArray(theta) ? theta : [theta];
+      comps = Array.isArray(comps) ? comps : [comps];
+      const B = Array.from({ length: theta.length * comps.length }, () =>
+        Array(4 + 8 * this.n_modes).fill(0)
+      );
+
+      for (let it = 0; it < theta.length; it++) {
+        for (let ic = 0; ic < comps.length; ic++) {
+          B[comps.length * it + ic][comps[ic]] = 1.0;
+        }
+        for (let n = 1; n <= this.n_modes; n++) {
+          const cos_ni = Math.cos(n * theta[it]);
+          const sin_ni = Math.sin(n * theta[it]);
+          for (let ic = 0; ic < comps.length; ic++) {
+            const c = comps[ic];
+            B[comps.length * it + ic][4 + 8 * (n - 1) + 2 * c] = cos_ni;
+            B[comps.length * it + ic][4 + 8 * (n - 1) + 2 * c + 1] = sin_ni;
+          }
+        }
+      }
+      return B;
+    }
+
+    K_rim_matl(r0 = true) {
+      const w = this.wheel;
+      const R = w.rim.radius;
+      const EA = w.rim.young_mod * w.rim.area;
+      const EI_rad = w.rim.young_mod * w.rim.I_rad;
+      const EI_lat = w.rim.young_mod * w.rim.I_lat;
+      const EIw = w.rim.young_mod * w.rim.I_warp;
+      const GJ = w.rim.shear_mod * w.rim.J_tor;
+
+      let y0 = 0.0;
+      if (w.rim.sec_params && ("y_0" in w.rim.sec_params)) y0 = w.rim.sec_params.y_0;
+
+      const K = Array.from({ length: 4 + 8 * this.n_modes }, () =>
+        Array(4 + 8 * this.n_modes).fill(0)
+      );
+
+      K[1][1] = 2 * Math.PI * EA / R;
+      K[3][3] = 2 * Math.PI * EI_lat / R;
+
+      for (let n = 1; n <= this.n_modes; n++) {
+        const i0 = 4 + (n - 1) * 8;
+
+        K[i0 + 2][i0 + 2] = EI_rad * Math.PI / (R ** 3) * (n ** 4) +
+                            EA * Math.PI / R * (1 + y0 / R * (n ** 2)) ** 2;
+        K[i0 + 3][i0 + 3] = K[i0 + 2][i0 + 2];
+
+        K[i0 + 4][i0 + 4] = EI_rad * Math.PI / (R ** 3) * (n ** 2) +
+                            EA * Math.PI / R * (n ** 2) * (1 + y0 / R) ** 2;
+        K[i0 + 5][i0 + 5] = K[i0 + 4][i0 + 4];
+
+        const kvw = -EI_rad * Math.PI / (R ** 3) * (n ** 3) -
+                    EA * Math.PI * n / R * (1 + y0 / R * (1 + n ** 2) + (y0 ** 2 / R ** 2) * (n ** 2));
+        K[i0 + 2][i0 + 5] = kvw;
+        K[i0 + 5][i0 + 2] = kvw;
+        K[i0 + 3][i0 + 4] = -kvw;
+        K[i0 + 4][i0 + 3] = -kvw;
+
+        K[i0 + 0][i0 + 0] = EI_lat * Math.PI / (R ** 3) * (n ** 4) +
+                            EIw * Math.PI / (R ** 5) * (n ** 4) +
+                            GJ * Math.PI / (R ** 3) * (n ** 2);
+        K[i0 + 1][i0 + 1] = K[i0 + 0][i0 + 0];
+
+        K[i0 + 0][i0 + 6] = -(EI_lat * Math.PI / (R ** 2) * (n ** 2) +
+                               EIw * Math.PI / (R ** 4) * (n ** 4) +
+                               GJ * Math.PI / (R ** 2) * (n ** 2));
+        K[i0 + 6][i0 + 0] = K[i0 + 0][i0 + 6];
+        K[i0 + 1][i0 + 7] = K[i0 + 0][i0 + 6];
+        K[i0 + 7][i0 + 1] = K[i0 + 0][i0 + 6];
+
+        K[i0 + 6][i0 + 6] = EI_lat * Math.PI / R + EIw * Math.PI / (R ** 3) * (n ** 4) + GJ * Math.PI / R * (n ** 2);
+        K[i0 + 7][i0 + 7] = K[i0 + 6][i0 + 6];
+      }
+      return K;
+    }
+
+    K_rim_geom(r0 = true) {
+      const w = this.wheel;
+      const R = w.rim.radius;
+
+      let y0 = 0.0;
+      if (w.rim.sec_params && ("y_0" in w.rim.sec_params)) y0 = w.rim.sec_params.y_0;
+
+      let r02 = 0.0;
+      if (r0) r02 = w.rim.I_rad / w.rim.area + w.rim.I_lat / w.rim.area + y0 ** 2;
+
+      const K = Array.from({ length: 4 + 8 * this.n_modes }, () =>
+        Array(4 + 8 * this.n_modes).fill(0)
+      );
+
+      K[3][3] = -2 * Math.PI * R * y0;
+
+      for (let n = 1; n <= this.n_modes; n++) {
+        const i0 = 4 + (n - 1) * 8;
+        K[i0 + 0][i0 + 0] = Math.PI * n ** 2 * (1 + r02 / R ** 2);
+        K[i0 + 1][i0 + 1] = K[i0 + 0][i0 + 0];
+
+        K[i0 + 0][i0 + 6] = Math.PI * n ** 2 * (y0 - r02 / R);
+        K[i0 + 6][i0 + 0] = K[i0 + 0][i0 + 6];
+        K[i0 + 1][i0 + 7] = K[i0 + 0][i0 + 6];
+        K[i0 + 7][i0 + 1] = K[i0 + 0][i0 + 6];
+
+        K[i0 + 6][i0 + 6] = -Math.PI * (R * y0 - r02 * n ** 2);
+        K[i0 + 7][i0 + 7] = K[i0 + 6][i0 + 6];
+      }
+
+      const scale = this.wheel.spokes.length / (2 * Math.PI * R);
+      return K.map(row => row.map(v => v * scale));
+    }
+
+    K_spk_geom(smeared_spokes = false) {
+      const dim = 4 + 8 * this.n_modes;
+      const K = Array.from({ length: dim }, () => Array(dim).fill(0));
+
+      if (smeared_spokes) {
+        const k_avg = 2 * Math.PI * this.wheel.rim.radius * this.wheel.calc_kbar_geom();
+        for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) K[i][j] = k_avg[i][j];
+
+        for (let n = 1; n <= this.n_modes; n++) {
+          const a = 4 + 8 * (n - 1);
+          for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+              K[a + 2 * i][a + 2 * j] = k_avg[i][j] / 2;
+              K[a + 2 * i + 1][a + 2 * j + 1] = k_avg[i][j] / 2;
+            }
+          }
+        }
+        return K;
+      }
+
+      const s0 = this.wheel.spokes[0];
+      const s1 = this.wheel.spokes[1];
+      const Td = Math.abs(s0.n[0] * s1.n[1]) + Math.abs(s1.n[0] * s0.n[1]);
+
+      for (const s of this.wheel.spokes) {
+        const B = this.B_theta(s.rim_pt[1]);
+        const kg = s.calc_k_geom();
+        const scale = 2 * Math.abs(s.n[0]) / Math.max(Td, 1e-12);
+
+        const tmp = matMul(kg, B);
+        const Bt = transpose(B);
+        const contrib = matMul(Bt, tmp);
+        addInPlace(K, contrib, scale);
+      }
+      return K;
+    }
+
+    K_spk(smeared_spokes = false, tension = true) {
+      const dim = 4 + 8 * this.n_modes;
+      const K = Array.from({ length: dim }, () => Array(dim).fill(0));
+
+      if (smeared_spokes) {
+        const k_avg = 2 * Math.PI * this.wheel.rim.radius * this.wheel.calc_kbar(tension=tension);
+        for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) K[i][j] = k_avg[i][j];
+
+        for (let n = 1; n <= this.n_modes; n++) {
+          const a = 4 + 8 * (n - 1);
+          for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+              K[a + 2 * i][a + 2 * j] = k_avg[i][j] / 2;
+              K[a + 2 * i + 1][a + 2 * j + 1] = k_avg[i][j] / 2;
+            }
+          }
+        }
+        return K;
+      }
+
+      for (const s of this.wheel.spokes) {
+        const B = this.B_theta(s.rim_pt[1]);
+        const ks = s.calc_k(tension=tension);
+        const contrib = matMul(transpose(B), matMul(ks, B));
+        addInPlace(K, contrib, 1.0);
+      }
+      return K;
+    }
+
+    F_ext(theta, f) {
+      const B = this.B_theta(theta);
+      return matVecMul(transpose(B), f);
+    }
+
+    get_ix_uncoupled(dim='lateral') {
+      if (dim === 'lateral') {
+        return sortUnique([0, 3]
+          .concat(rangeStep(4, 4 + 8 * this.n_modes, 8))
+          .concat(rangeStep(5, 4 + 8 * this.n_modes, 8))
+          .concat(rangeStep(10, 4 + 8 * this.n_modes, 8))
+          .concat(rangeStep(11, 4 + 8 * this.n_modes, 8)));
+      }
+      return sortUnique([1, 2]
+        .concat(rangeStep(6, 4 + 8 * this.n_modes, 8))
+        .concat(rangeStep(7, 4 + 8 * this.n_modes, 8))
+        .concat(rangeStep(8, 4 + 8 * this.n_modes, 8))
+        .concat(rangeStep(9, 4 + 8 * this.n_modes, 8)));
+    }
+
+    get_K_uncoupled(K, dim='lateral') {
+      const ix = this.get_ix_uncoupled(dim);
+      return subMatrix(K, ix, ix);
+    }
+
+    rim_def_lat(theta, dm) { return matVecMul(this.B_theta(theta, 0), dm); }
+    rim_def_rad(theta, dm) { return matVecMul(this.B_theta(theta, 1), dm); }
+    rim_def_tan(theta, dm) { return matVecMul(this.B_theta(theta, 2), dm); }
+    rim_def_rot(theta, dm) { return matVecMul(this.B_theta(theta, 3), dm); }
+
+    spoke_tension_change(dm, a = null) {
+      if (!a) a = Array(this.wheel.spokes.length).fill(0);
+      const out = [];
+      for (let i = 0; i < this.wheel.spokes.length; i++) {
+        const s = this.wheel.spokes[i];
+        const Bi = this.B_theta(s.rim_pt[1]);
+        const disp = matVecMul(Bi, dm);
+        out.push(s.calc_tension_change(disp, a[i]));
+      }
+      return out;
+    }
+  }
+
+  function rangeStep(start, stop, step) {
+    const out = [];
+    for (let i = start; i < stop; i += step) out.push(i);
+    return out;
+  }
+
+  function sortUnique(arr) {
+    return [...new Set(arr)].sort((a,b)=>a-b);
+  }
+
+  function transpose(A) {
+    return A[0].map((_, j) => A.map(row => row[j]));
+  }
+
+  function matMul(A, B) {
+    const r = A.length, c = B[0].length, n = B.length;
+    const out = Array.from({ length: r }, () => Array(c).fill(0));
+    for (let i = 0; i < r; i++) for (let k = 0; k < n; k++) for (let j = 0; j < c; j++) out[i][j] += A[i][k] * B[k][j];
+    return out;
+  }
+
+  function matVecMul(A, x) {
+    return A.map(row => row.reduce((s, v, i) => s + v * x[i], 0));
+  }
+
+  function addInPlace(A, B, scale = 1.0) {
+    for (let i = 0; i < A.length; i++) for (let j = 0; j < A[0].length; j++) A[i][j] += scale * B[i][j];
+  }
+
+  function subMatrix(A, rows, cols) {
+    return rows.map(i => cols.map(j => A[i][j]));
+  }
+
+  function solveLinear(A, b) {
+    const n = A.length;
+    const M = A.map((row, i) => row.slice().concat([b[i]]));
+    for (let k = 0; k < n; k++) {
+      let piv = k;
+      for (let i = k + 1; i < n; i++) if (Math.abs(M[i][k]) > Math.abs(M[piv][k])) piv = i;
+      [M[k], M[piv]] = [M[piv], M[k]];
+      const div = M[k][k] || 1e-18;
+      for (let j = k; j <= n; j++) M[k][j] /= div;
+      for (let i = 0; i < n; i++) if (i !== k) {
+        const f = M[i][k];
+        for (let j = k; j <= n; j++) M[i][j] -= f * M[k][j];
+      }
+    }
+    return M.map(row => row[n]);
+  }
+
+  function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes, nUpper = 24, wheel }) {
+    const mm = new ModeMatrix(wheel, nUpper);
+    const K = addMatrices(mm.K_rim_matl(true), mm.K_spk(false, true));
+    const K_unc = mm.get_K_uncoupled(K, 'lateral');
+    const F = mm.F_ext(0.0, [1,0,0,0]);
+    const ix = mm.get_ix_uncoupled('lateral');
+    const b = ix.map(i => F[i]);
+    const d_uc = solveLinear(K_unc, b);
+    const d = Array(K.length).fill(0);
+    ix.forEach((i, k) => { d[i] = d_uc[k]; });
+
+    const lat_def = mm.rim_def_lat(0.0, d)[0];
+    const K_lat = 1 / Math.max(Math.abs(lat_def), 1e-12);
+
+    const K2 = addMatrices(mm.K_rim_matl(true), mm.K_spk(false, true));
+    const Fr = mm.F_ext(0.0, [0,1,0,0]);
+    const ixr = mm.get_ix_uncoupled('radial');
+    const Kr = mm.get_K_uncoupled(K2, 'radial');
+    const br = ixr.map(i => Fr[i]);
+    const dr_uc = solveLinear(Kr, br);
+    const dr = Array(K2.length).fill(0);
+    ixr.forEach((i, k) => { dr[i] = dr_uc[k]; });
+    const rad_def = mm.rim_def_rad(0.0, dr)[0];
+    const K_rad = 1 / Math.max(Math.abs(rad_def), 1e-12);
+
+    return {
+      K_lat: +(K_lat / 1000).toFixed(1),
+      K_rad: +(K_rad / 1000).toFixed(0),
+      F_lat_kgf: +(calcDetension(mm, d, t_ds, 'lat') / kgf_to_N).toFixed(1),
+      F_rad_kgf: +(calcDetension(mm, dr, t_ds, 'rad') / kgf_to_N).toFixed(1),
+      ratio_pct: +(calcSymmetry(mm, t_ds)).toFixed(1),
+      symmetry_pct: +(calcSymmetry(mm, t_ds)).toFixed(1),
+      t_nds: +(estimateNdsTension(mm, t_ds)).toFixed(1),
+      beta_ds: +(calcBeta(wheel.spokes[0]) * 180 / Math.PI).toFixed(2),
+      beta_nds: +(calcBeta(wheel.spokes[1]) * 180 / Math.PI).toFixed(2),
+      L_ds_mm: +(wheel.spokes[0].length * 1000).toFixed(1),
+      L_nds_mm: +(wheel.spokes[1].length * 1000).toFixed(1),
+      ftf: +(d_ds + d_nds).toFixed(1),
+    };
+  }
+
+  function addMatrices(A, B) {
+    return A.map((row, i) => row.map((v, j) => v + B[i][j]));
+  }
+
+  function calcBeta(spoke) {
+    return Math.asin(Math.min(Math.max(spoke.n[0], -0.999999), 0.999999));
+  }
+
+  function estimateNdsTension(mm, t_ds) {
+    const s0 = mm.wheel.spokes[0];
+    const s1 = mm.wheel.spokes[1];
+    const Tds = t_ds * kgf_to_N;
+    const ratio = Math.abs(s0.n[0]) / Math.max(Math.abs(s1.n[0]), 1e-12);
+    return (Tds * ratio) / kgf_to_N;
+  }
+
+  function calcSymmetry(mm, t_ds) {
+    const s0 = mm.wheel.spokes[0];
+    const s1 = mm.wheel.spokes[1];
+    const Tds = t_ds * kgf_to_N;
+    const Tnds = Tds * Math.abs(s0.n[0]) / Math.max(Math.abs(s1.n[0]), 1e-12);
+    return 100 * Math.min(Tds, Tnds) / Math.max(Tds, Tnds);
+  }
+
+  function calcDetension(mm, dm, t_ds, mode='lat') {
+    const tensions = mm.spoke_tension_change(dm);
+    const minSlope = Math.min(...tensions.map(v => Math.abs(v) || 1e-12));
+    return t_ds * kgf_to_N / minSlope;
+  }
+</script>
 
       function sideGeom(width_mm, pcd_mm) {
         const width = width_mm / 1000;
