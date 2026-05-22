@@ -19,8 +19,7 @@
 
     const WHEEL_SIZES = {
       '29"':   { erd: 600, label: '29" ISO 622' },
-      '27.5"': { erd: 559, label: '27.5" ISO 584' },
-      '26"':   { erd: 534, label: '26" ISO 559' },
+      '27.5"': { erd: 559, label: '27.5" ISO 584' }
     };
 
     const kgf_to_N = 9.80665;
@@ -158,10 +157,11 @@
         this.spokes = [];
         const n_half = n_spokes / 2;
         
+        // BUG FIX: An asymmetric rim shifts the *entire* spoke bed. Both sides must use +offset.
         for (let s = 0; s < n_half; s++) {
           const theta_rim = (2 * Math.PI / n_spokes) * (s * 2 + 1);
           const s_dir = 2 * ((s + 1) % 2) - 1;
-          const rim_pt = [this.rim.radius, theta_rim, -offset];
+          const rim_pt = [this.rim.radius, theta_rim, offset]; 
           const hub_pt = [this.hub.diameter_ds / 2, theta_rim + 2 * Math.PI / n_half * n_cross * s_dir, -this.hub.width_ds];
           this.spokes.push(new Spoke(rim_pt, hub_pt, diameter, young_mod));
         }
@@ -258,10 +258,12 @@
     }
 
     // --- High Level Assembly ---
-    function buildWheel({ preset, wheelKey, offsetRim, tDS, nSpokes }) {
+    function buildWheel({ preset, wheelKey, offsetRim, tDS, nSpokes, rimMultiplier }) {
       const rimOffsetMm = offsetRim ? 3.0 : 0.0;
       const erd = WHEEL_SIZES[wheelKey].erd;
-      const rim = new Rim(erd / 2 / 1000, 0.00045, 1.2e-8, 0.4e-8, 2.0e-10, 0.5e-10, 69e9, 26e9);
+      
+      // Inject stiffness multiplier so students can test Rigid vs Elastic theorems
+      const rim = new Rim(erd / 2 / 1000, 0.00045, 1.2e-8 * rimMultiplier, 0.4e-8 * rimMultiplier, 2.0e-10 * rimMultiplier, 0.5e-10 * rimMultiplier, 69e9, 26e9);
       const hub = new Hub(preset.hub_diameter_nds, preset.hub_diameter_ds, preset.d_nds / 1000, preset.d_ds / 1000);
       
       const wheel = new BicycleWheel();
@@ -295,7 +297,7 @@
       
       const K_rigid = n_side * k_ds * (sin_ds ** 2) + n_side * k_nds * (sin_nds ** 2);
       const rigid_def = 100 / K_rigid;
-      const rigid_dT = rigid_def * k_nds * sin_nds; // Weakest side detension
+      const rigid_dT = rigid_def * k_nds * sin_nds; 
       const F_lat_rigid = 100 * (s_nds.tension / rigid_dT);
 
       return {
@@ -304,30 +306,27 @@
         F_lat_rigid: +(F_lat_rigid / kgf_to_N).toFixed(1),
         ratio_pct: +(s_nds.tension / s_ds.tension * 100).toFixed(1),
         symmetry_pct: +(Math.min(s_ds.tension, s_nds.tension) / Math.max(s_ds.tension, s_nds.tension) * 100).toFixed(1),
-        t_nds: +(s_nds.tension / kgf_to_N).toFixed(1),
       };
     }
 
     const PRESETS = [
-      { id:'r142', short:'142mm', name:'ISO 142×12 Rear', old:142, d_ds:20.1, d_nds:33.9, hub_diameter_ds:57.4e-3, hub_diameter_nds:57.4e-3 },
-      { id:'r148', short:'Boost', name:'Boost 148×12 Rear', old:148, d_ds:24.0, d_nds:36.3, hub_diameter_ds:57.4e-3, hub_diameter_nds:57.4e-3 },
-      { id:'r157', short:'Superboost', name:'Superboost 157×12', old:157, d_ds:28.8, d_nds:42.3, hub_diameter_ds:57.4e-3, hub_diameter_nds:57.4e-3 },
-      { id:'r157b', short:'Spank 150', name:'Spank 150/157', old:157, d_ds:29.5, d_nds:39.6, hub_diameter_ds:58.0e-3, hub_diameter_nds:58.0e-3 },
+      { id:'r142', short:'142mm', name:'ISO 142×12 Rear', d_ds:20.1, d_nds:33.9, hub_diameter_ds:57.4e-3, hub_diameter_nds:57.4e-3 },
+      { id:'r148', short:'Boost', name:'Boost 148×12 Rear', d_ds:24.0, d_nds:36.3, hub_diameter_ds:57.4e-3, hub_diameter_nds:57.4e-3 },
+      { id:'r157', short:'Superboost', name:'Superboost 157×12', d_ds:28.8, d_nds:42.3, hub_diameter_ds:57.4e-3, hub_diameter_nds:57.4e-3 },
+      { id:'r157b', short:'Spank 150', name:'Spank 150/157', d_ds:29.5, d_nds:39.6, hub_diameter_ds:58.0e-3, hub_diameter_nds:58.0e-3 },
     ];
 
     function HubAnalysis() {
       const [wheelKey, setWheelKey] = useState('29"');
-      const [presetId, setPresetId] = useState('r148');
-      const [tDS, setTDS] = useState(100);
+      const [tDS, setTDS] = useState(115);
       const [offsetRim, setOffsetRim] = useState(true);
+      const [rimMultiplier, setRimMultiplier] = useState(1.0);
 
       const data = useMemo(() => PRESETS.map(p => {
-        const w = buildWheel({ preset: p, wheelKey, offsetRim, tDS, nSpokes: 32 });
+        const w = buildWheel({ preset: p, wheelKey, offsetRim, tDS, nSpokes: 32, rimMultiplier });
         const res = calcWheel(w, 16);
-        return { ...p, d_ds_display: p.d_ds + (offsetRim?3:0), d_nds_display: p.d_nds - (offsetRim?3:0), ...res, isActive: p.id === presetId };
-      }), [wheelKey, offsetRim, tDS, presetId]);
-
-      const activeData = data.find(d => d.id === presetId);
+        return { ...p, ...res };
+      }), [wheelKey, offsetRim, tDS, rimMultiplier]);
 
       return (
         <div className="bg-[#060d18] min-h-screen font-mono text-[#e2e8f0] text-xs">
@@ -336,51 +335,56 @@
           </div>
 
           <div className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-            
             <div className="space-y-6">
               <div className="bg-[#0b1826] border border-[#1e3050] rounded p-5">
-                 <div className="text-[10px] text-blue-500 tracking-widest mb-4 uppercase">System Data</div>
-                 <div className="grid grid-cols-2 gap-4">
+                 <div className="text-[10px] text-blue-500 tracking-widest mb-4 uppercase">System Controls</div>
+                 <div className="space-y-4">
                     <div>
-                      <label className="block text-[9px] text-[#2d4a6a] tracking-widest mb-2">HUB PRESET</label>
-                      <select value={presetId} onChange={e=>setPresetId(e.target.value)} className="w-full bg-[#0a1620] text-blue-400 p-2 border border-[#1e3050]">
-                        {PRESETS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                      </select>
+                        <div className="flex justify-between mb-1">
+                          <label className="text-[9px] text-[#2d4a6a] tracking-widest">RIM ELASTICITY MULTIPLIER</label>
+                          <span className="text-blue-400">{rimMultiplier.toFixed(1)}x</span>
+                        </div>
+                        <input type="range" min={1} max={15} step={0.5} value={rimMultiplier} onChange={e=>setRimMultiplier(+e.target.value)} className="w-full accent-blue-500" />
+                        <div className="flex justify-between text-[8px] text-[#4a6a8a] mt-1">
+                          <span>STANDARD ALLOY (FEA Reality)</span>
+                          <span>INFINITE STIFFNESS (Rigid Theory)</span>
+                        </div>
                     </div>
                     <div>
-                        <label className="block text-[9px] text-[#2d4a6a] tracking-widest mb-2">3MM ASYMMETRIC RIM</label>
+                        <label className="block text-[9px] text-[#2d4a6a] tracking-widest mb-2">3MM ASYMMETRIC RIM BED</label>
                         <button onClick={() => setOffsetRim(!offsetRim)} className={`w-full p-2 border ${offsetRim ? 'bg-green-900 border-green-500 text-green-300' : 'bg-[#0a1620] border-[#1e3050] text-[#4a6a8a]'}`}>
-                          {offsetRim ? 'ENABLED' : 'DISABLED'}
+                          {offsetRim ? 'ENABLED (Note: Shifting the entire rim bed equally does not alter symmetry ratios)' : 'DISABLED'}
                         </button>
                     </div>
                  </div>
+                 
                  <div className="grid grid-cols-2 gap-3 mt-6">
                    <div className="bg-[#0a1620] border border-[#1e3050] rounded p-3 text-center">
-                     <div className="text-[9px] text-[#2d4a6a] mb-1">TENSION SYMMETRY</div>
-                     <div className="text-xl text-green-400">{activeData.symmetry_pct}%</div>
+                     <div className="text-[9px] text-[#2d4a6a] mb-1">148MM SYMMETRY</div>
+                     <div className="text-xl text-green-400">{data[1].symmetry_pct}%</div>
                    </div>
                    <div className="bg-[#0a1620] border border-[#1e3050] rounded p-3 text-center">
-                     <div className="text-[9px] text-[#2d4a6a] mb-1">LATERAL STIFFNESS</div>
-                     <div className="text-xl text-blue-400">{activeData.K_lat} N/mm</div>
+                     <div className="text-[9px] text-[#2d4a6a] mb-1">157MM SYMMETRY</div>
+                     <div className="text-xl text-green-400">{data[2].symmetry_pct}%</div>
                    </div>
                  </div>
               </div>
             </div>
 
             <div className="bg-[#0b1826] border border-[#1e3050] rounded p-5">
-              <div className="text-[10px] text-amber-500 tracking-widest mb-4 uppercase">Lateral Strength (Rigid Theory vs FEA Reality)</div>
+              <div className="text-[10px] text-amber-500 tracking-widest mb-4 uppercase">Lateral Strength Limits</div>
               <p className="text-[10px] text-slate-400 mb-4 leading-relaxed">
-                Marketing materials claim ~20% strength gains for 157mm hubs based on <strong>Rigid Body Theory</strong>. However, expanding the bracing angle increases the Foundation Modulus, causing impact loads to highly localize. This <strong>Elastic Reality</strong> eats up most of the geometric advantage, resulting in smaller absolute detension limits.
+                Marketing materials claim ~20% strength gains for 157mm hubs based on <strong>Rigid Rim Theory</strong>. However, expanding the bracing angle increases the foundation stiffness, causing impact loads to highly localize. Drag the slider to the right to see the FEA reality merge with the marketing claims!
               </p>
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart data={data} margin={{top:10,right:10,bottom:20,left:0}}>
                   <CartesianGrid strokeDasharray="3,3" stroke="#0d1e33"/>
                   <XAxis dataKey="short" tick={{fill:'#4a6a8a',fontSize:10}} />
-                  <YAxis tick={{fill:'#4a6a8a',fontSize:10}} domain={['dataMin - 10', 'auto']} />
+                  <YAxis tick={{fill:'#4a6a8a',fontSize:10}} domain={['dataMin - 5', 'auto']} />
                   <Tooltip contentStyle={{backgroundColor: '#0b1826', borderColor: '#1e3050', fontSize: '11px', color: '#e2e8f0'}}/>
                   <Legend wrapperStyle={{fontSize: '11px', color: '#4a6a8a'}} />
-                  <Bar dataKey="F_lat_rigid" name="Rigid Rim Theory (kgf)" fill="#3d5a80" />
-                  <Bar dataKey="F_lat_elastic" name="FEA Matrix Reality (kgf)" fill="#f59e0b" />
+                  <Bar dataKey="F_lat_rigid" name="Rigid Theory (Marketing)" fill="#3d5a80" />
+                  <Bar dataKey="F_lat_elastic" name="FEA Matrix (Reality)" fill="#f59e0b" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
