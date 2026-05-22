@@ -24,8 +24,9 @@
       '26"':   { erd: 534, label: '26" ISO 559' },
     };
 
-    // ── MATH ENGINE (minimal mode‑matrix style, 1 mode) ──────────────────────
-    function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes }) {
+    const kgf_to_N = 9.80665;
+
+    function calcWheel({ d_ds, d_nds, pcd_ds, pcd_nds, erd_mm, t_ds, n_spokes, nUpper = 24 }) {
       const E_spoke = 210e9;
       const d_spoke = 2.0e-3;
       const A_spoke = Math.PI * Math.pow(d_spoke / 2, 2);
@@ -33,125 +34,101 @@
 
       const E_rim = 69e9;
       const G_rim = 26e9;
-      const I_lat = 1500 * 1e-12;
-      const I_rad = 3000 * 1e-12;
-      const J_tor = 500 * 1e-12;
+      const I_lat = 1500e-12;
+      const I_rad = 3000e-12;
+      const J_tor = 500e-12;
 
-      const R = erd_mm / 2 / 1000;  // m
+      const R = erd_mm / 2 / 1000;
       const n_cross = 3;
-      const n_spokes_ds = n_spokes / 2;
-      const n_spokes_nds = n_spokes / 2;
+      const ns = n_spokes / 2;
 
-      // 3D geometry for each side (radial, tangential, lateral)
-      function calcSideParams(d_width, rimR, pcd, ns, ncs) {
-        const r_hub = pcd / 2 / 1000;
-        const theta_cross = (ncs * 4 * Math.PI) / ns;  // 2D angle per side
-
-        const rad = rimR - r_hub * Math.cos(theta_cross);
-        const tan = r_hub * Math.sin(theta_cross);
-        const lat = d_width / 1000;
-        const len = Math.sqrt(rad * rad + tan * tan + lat * lat);
-
-        const c_rad = rad / Math.max(len, 1e-12);
-        const c_tan = tan / Math.max(len, 1e-12);
-        const c_lat = lat / Math.max(len, 1e-12);
-
-        const EA_L = EA / Math.max(len, 1e-12);
-        const k_lat = EA_L * c_lat * c_lat;
-        const k_rad = EA_L * c_rad * c_rad;
-        const k_tan = EA_L * c_tan * c_tan;
-
-        return {
-          L: len,
-          c_lat,
-          c_rad,
-          c_tan,
-          EA_L,
-          k_lat,
-          k_rad,
-          k_tan,
-        };
+      function sideGeom(width_mm, pcd_mm) {
+        const width = width_mm / 1000;
+        const r_hub = pcd_mm / 2 / 1000;
+        const theta = (n_cross * 4 * Math.PI) / n_spokes;
+        const L = Math.sqrt(width**2 + R**2 + r_hub**2 - 2 * R * r_hub * Math.cos(theta));
+        const sin_beta = width / Math.max(L, 1e-12);
+        const cos_beta = Math.sqrt(Math.max(0, 1 - sin_beta**2));
+        const tan_beta = r_hub * Math.sin(theta) / Math.max(L, 1e-12);
+        const k_axial = EA / Math.max(L, 1e-12);
+        const tension = 0;
+        return { width, r_hub, L, sin_beta, cos_beta, tan_beta, k_axial, tension };
       }
 
-      const ds = calcSideParams(d_ds, R, pcd_ds, n_spokes, n_cross);
-      const nds = calcSideParams(d_nds, R, pcd_nds, n_spokes, n_cross);
+      const ds = sideGeom(d_ds, pcd_ds);
+      const nds = sideGeom(d_nds, pcd_nds);
 
-      // Tension balance (mimics vector projection, simplified)
-      const T_ds_N = t_ds * 9.81;
-      const T_nds_N = T_ds_N * ds.k_lat / nds.k_lat;
+      const T_ds_N = t_ds * kgf_to_N;
+      const T_nds_N = T_ds_N * (ds.sin_beta / Math.max(nds.sin_beta, 1e-12)) * (nds.cos_beta / Math.max(ds.cos_beta, 1e-12));
 
-      // Smear the spokes into a 1‑mode equivalent rim + spoke matrix
-      // lateral: u / φ block
-      const kbar_uu = (n_spokes_ds * ds.k_rad + n_spokes_nds * nds.k_rad) / (2 * Math.PI * R);
-      const kbar_uu_lat = (n_spokes_ds * ds.k_lat + n_spokes_nds * nds.k_lat) / (2 * Math.PI * R);
-      const kbar_up = 0;  // crude 1‑mode assumption
-      const kbar_pp = 0;
+      const k_lat_ds = (T_ds_N / ds.L) + ds.k_axial * ds.sin_beta**2;
+      const k_lat_nds = (T_nds_N / nds.L) + nds.k_axial * nds.sin_beta**2;
+      const k_rad_ds = (T_ds_N / ds.L) + ds.k_axial * ds.cos_beta**2;
+      const k_rad_nds = (T_nds_N / nds.L) + nds.k_axial * nds.cos_beta**2;
+
+      const K_foundation_lat = ns * (k_lat_ds + k_lat_nds) / 2;
+      const K_foundation_rad = ns * (k_rad_ds + k_rad_nds) / 2;
 
       const EI_lat = E_rim * I_lat;
-      const GJ = G_rim * J_tor;
-      const mode_lat_n2 = 1;  // n=1 lateral mode
-
-      const K_lat_lateral = 2 * Math.PI * R * (kbar_uu_lat - R * R * kbar_up * kbar_up / (EI_lat / (R * R) + GJ / R + kbar_pp));
-      const K_lat_torsional = 2 * Math.PI * R * kbar_uu_lat;  // simplified
-
-      const K_lat = (K_lat_lateral + K_lat_torsional) / 2;  // blended lateral stiffness, N/m
-
-      // radial: v / w block
-      const kbar_vv = (n_spokes_ds * ds.k_rad + n_spokes_nds * nds.k_rad) / (2 * Math.PI * R);
-      const kbar_wv = 0;
-      const kbar_ww = 0;
-
       const EI_rad = E_rim * I_rad;
-      const mode_rad_n2 = 1;  // n=1 radial mode
+      const GJ = G_rim * J_tor;
+      const coeff = Math.PI / Math.pow(R, 3);
 
-      const K_rad_radial = 2 * Math.PI * R * kbar_vv;
-      const K_rad_tangential = 2 * Math.PI * R * kbar_vv;
+      function modeContributionLat(n) {
+        const q = n * n;
+        return coeff * (EI_lat * Math.pow(q - 1, 2) + GJ * (q - 1));
+      }
 
-      const K_rad = (K_rad_radial + K_rad_tangential) / 2;  // blended radial stiffness, N/m
+      function modeContributionRad(n) {
+        const q = n * n;
+        return coeff * EI_rad * Math.pow(q - 1, 2);
+      }
 
-      // Convert to N/mm, N/mm
-      const K_lat_Nmm = K_lat / 1e6;  // N/mm
-      const K_rad_Nmm = K_rad / 1e6;  // N/mm
+      let compliance_lat = 1 / Math.max(2 * K_foundation_lat, 1e-12);
+      let compliance_rad = 1 / Math.max(2 * K_foundation_rad, 1e-12);
 
-      // Now: detension loads
-      // 1. lateral unit load → rim deflection
-      const LAT_UNIT = 1.0;  // 1 N lateral load
-      const U_lat = LAT_UNIT / K_lat;  // m lateral deflection
+      for (let n = 1; n <= nUpper; n++) {
+        compliance_lat += 1 / Math.max(K_foundation_lat + modeContributionLat(n), 1e-12);
+        compliance_rad += 1 / Math.max(K_foundation_rad + modeContributionRad(n), 1e-12);
+      }
 
-      // 2. radial unit load → rim deflection
-      const RAD_UNIT = 1.0;  // 1 N radial load
-      const U_rad = RAD_UNIT / K_rad;  // m radial deflection
+      const K_wheel_lat = 1 / compliance_lat;
+      const K_wheel_rad = 1 / compliance_rad;
 
-      // 3. spoke tension change under those deflections
-      const dT_ds_lat = EA / ds.L * (U_lat * ds.c_lat) * Math.sign(ds.c_lat);
-      const dT_nds_lat = EA / nds.L * (U_lat * nds.c_lat) * Math.sign(nds.c_lat);
-      const dT_ds_rad = EA / ds.L * (U_rad * ds.c_rad) * Math.sign(ds.c_rad);
-      const dT_nds_rad = EA / nds.L * (U_rad * nds.c_rad) * Math.sign(nds.c_rad);
+      const loadToSlack = (T, kSide, share, stiff) => {
+        const deltaPerN = Math.max(share * stiff / Math.max(kSide, 1e-12), 1e-12);
+        return T / deltaPerN;
+      };
 
-      // 4. minimum load that drives each spoke to zero tension
-      const Flat_ds_N = Math.abs(T_ds_N / Math.max(dT_ds_lat, 1e-12));
-      const Flat_nds_N = Math.abs(T_nds_N / Math.max(dT_nds_lat, 1e-12));
-      const Frad_ds_N = Math.abs(T_ds_N / Math.max(dT_ds_rad, 1e-12));
-      const Frad_nds_N = Math.abs(T_nds_N / Math.max(dT_nds_rad, 1e-12));
+      const lat_share_ds = ds.k_axial * ds.sin_beta;
+      const lat_share_nds = nds.k_axial * nds.sin_beta;
+      const rad_share_ds = ds.k_axial * ds.cos_beta * ds.cos_beta;
+      const rad_share_nds = nds.k_axial * nds.cos_beta * nds.cos_beta;
+
+      const Flat_ds_N = loadToSlack(T_ds_N, ds.k_axial, lat_share_ds, K_wheel_lat);
+      const Flat_nds_N = loadToSlack(T_nds_N, nds.k_axial, lat_share_nds, K_wheel_lat);
+      const Frad_ds_N = loadToSlack(T_ds_N, ds.k_axial, rad_share_ds, K_wheel_rad);
+      const Frad_nds_N = loadToSlack(T_nds_N, nds.k_axial, rad_share_nds, K_wheel_rad);
 
       const Flat_N = Math.min(Flat_ds_N, Flat_nds_N);
       const Frad_N = Math.min(Frad_ds_N, Frad_nds_N);
 
+      const ratio = T_nds_N / Math.max(T_ds_N, 1e-12);
       const symmetry = Math.min(T_ds_N, T_nds_N) / Math.max(T_ds_N, T_nds_N);
 
       return {
-        ratio_pct    : +((T_nds_N / Math.max(T_ds_N, 1e-12)) * 100).toFixed(1),
-        symmetry_pct : +(symmetry * 100).toFixed(1),
-        t_nds        : +(T_nds_N / 9.81).toFixed(1),
-        beta_ds      : +(Math.asin(Math.min(ds.c_lat, 0.999999)) * 180 / Math.PI).toFixed(2),
-        beta_nds     : +(Math.asin(Math.min(nds.c_lat, 0.999999)) * 180 / Math.PI).toFixed(2),
-        K_lat        : +K_lat_Nmm.toFixed(1), 
-        K_rad        : +K_rad_Nmm.toFixed(0),
-        F_lat_kgf    : +(Flat_N / 9.81).toFixed(1),
-        F_rad_kgf    : +(Frad_N / 9.81).toFixed(1),
-        L_ds_mm      : +(ds.L * 1000).toFixed(1),
-        L_nds_mm     : +(nds.L * 1000).toFixed(1),
-        ftf          : +(d_ds + d_nds).toFixed(1),
+        ratio_pct: +(ratio * 100).toFixed(1),
+        symmetry_pct: +(symmetry * 100).toFixed(1),
+        t_nds: +(T_nds_N / kgf_to_N).toFixed(1),
+        beta_ds: +(Math.asin(Math.min(ds.sin_beta, 0.999999)) * 180 / Math.PI).toFixed(2),
+        beta_nds: +(Math.asin(Math.min(nds.sin_beta, 0.999999)) * 180 / Math.PI).toFixed(2),
+        K_lat: +(K_wheel_lat / 1000).toFixed(1),
+        K_rad: +(K_wheel_rad / 1000).toFixed(0),
+        F_lat_kgf: +(Flat_N / kgf_to_N).toFixed(1),
+        F_rad_kgf: +(Frad_N / kgf_to_N).toFixed(1),
+        L_ds_mm: +(ds.L * 1000).toFixed(1),
+        L_nds_mm: +(nds.L * 1000).toFixed(1),
+        ftf: +(d_ds + d_nds).toFixed(1),
       };
     }
 
@@ -201,31 +178,38 @@
               <stop offset="100%" stopColor="#92400e" />
             </linearGradient>
           </defs>
+
           <line x1={dx} y1={AY - pcd_ds * SC * 0.18} x2={rimVisualX} y2={compact ? 5 : 8} stroke="#f59e0b" strokeWidth={0.8} opacity={0.3}/>
           <line x1={nx} y1={AY - pcd_nds * SC * 0.18} x2={rimVisualX} y2={compact ? 5 : 8} stroke="#3b82f6" strokeWidth={0.8} opacity={0.3}/>
           <circle cx={rimVisualX} cy={compact ? 5 : 8} r={3} fill="none" stroke="#1e3050" strokeWidth={1}/>
           {!compact && <text x={rimVisualX + 8} y={12} fill="#1e3050" fontSize={7} fontFamily="monospace">{rimOffsetMm !== 0 ? 'RIM (OFFSET)' : 'RIM'}</text>}
+
           {OLD && <>
             <line x1={lx} y1={AY - FH - 10} x2={rx} y2={AY - FH - 10} stroke="#1e3050" strokeWidth={1}/>
             <line x1={lx} y1={AY - FH - 13} x2={lx} y2={AY - FH - 7} stroke="#1e3050" strokeWidth={1}/>
             <line x1={rx} y1={AY - FH - 13} x2={rx} y2={AY - FH - 7} stroke="#1e3050" strokeWidth={1}/>
             <text x={CX} y={AY - FH - 12} textAnchor="middle" fill="#2d4a6a" fontSize={compact ? 7 : 8} fontFamily="monospace">OLD {OLD}mm</text>
           </>}
+
           <line x1={lx - 5} y1={AY} x2={rx + 5} y2={AY} stroke="#1e3050" strokeWidth={2}/>
           <rect x={nx} y={AY - 5} width={Math.max(dx - nx, 1)} height={10} fill="#0a1620" stroke="#1e3050" strokeWidth={1}/>
           <rect x={lx - 6} y={AY - 14} width={6} height={28} fill="#142030" rx={1}/>
           <rect x={rx} y={AY - 14} width={6} height={28} fill="#142030" rx={1}/>
           <rect x={nx - 4} y={AY - FH} width={8} height={FH * 2} fill={`url(#${gid}b)`} rx={1}/>
           <rect x={dx - 4} y={AY - FH} width={8} height={FH * 2} fill={`url(#${gid}a)`} rx={1}/>
+
           {!compact && <>
             <text x={nx} y={AY - FH - 4} textAnchor="middle" fill="#60a5fa" fontSize={7} fontFamily="monospace">⌀{pcd_nds}</text>
             <text x={dx} y={AY - FH - 4} textAnchor="middle" fill="#fbbf24" fontSize={7} fontFamily="monospace">⌀{pcd_ds}</text>
           </>}
+
           <line x1={CX} y1={AY - FH} x2={CX} y2={AY + FH + 18} stroke="#1e3050" strokeWidth={1} strokeDasharray="3,2"/>
+
           <line x1={nx} y1={AY + FH + 5} x2={rimVisualX} y2={AY + FH + 5} stroke="#3b82f6" strokeWidth={1}/>
           <line x1={nx} y1={AY + FH + 2} x2={nx} y2={AY + FH + 8} stroke="#3b82f6" strokeWidth={1}/>
           <line x1={rimVisualX} y1={AY + FH + 2} x2={rimVisualX} y2={AY + FH + 8} stroke="#3b82f6" strokeWidth={1}/>
           <text x={(nx + rimVisualX) / 2} y={AY + FH + 17} textAnchor="middle" fill="#60a5fa" fontSize={compact ? 8 : 9} fontFamily="monospace">NDS {nds_eff.toFixed(1)}mm</text>
+
           <line x1={rimVisualX} y1={AY + FH + 5} x2={dx} y2={AY + FH + 5} stroke="#f59e0b" strokeWidth={1}/>
           <line x1={dx} y1={AY + FH + 2} x2={dx} y2={AY + FH + 8} stroke="#f59e0b" strokeWidth={1}/>
           <text x={(rimVisualX + dx) / 2} y={AY + FH + 17} textAnchor="middle" fill="#fbbf24" fontSize={compact ? 8 : 9} fontFamily="monospace">DS {ds_eff.toFixed(1)}mm</text>
@@ -283,6 +267,7 @@
       const [tDS, setTDS] = useState(100);
       const [nSpokes, setNSpokes] = useState(32);
       const [offsetRim, setOffsetRim] = useState(false);
+      const [nUpper, setNUpper] = useState(24);
 
       const erd = WHEEL_SIZES[wheelKey].erd;
       const rimOffsetMm = offsetRim ? 3.0 : 0.0;
@@ -295,22 +280,37 @@
       const d_nds_eff = activeBaseHub.d_nds - rimOffsetMm;
 
       const m = useMemo(() => calcWheel({
-        d_ds: d_ds_eff, d_nds: d_nds_eff,
-        pcd_ds: activeBaseHub.pcd_ds, pcd_nds: activeBaseHub.pcd_nds,
-        erd_mm: erd, t_ds: tDS, n_spokes: nSpokes
-      }), [d_ds_eff, d_nds_eff, activeBaseHub.pcd_ds, activeBaseHub.pcd_nds, erd, tDS, nSpokes]);
+        d_ds: d_ds_eff,
+        d_nds: d_nds_eff,
+        pcd_ds: activeBaseHub.pcd_ds,
+        pcd_nds: activeBaseHub.pcd_nds,
+        erd_mm: erd,
+        t_ds: tDS,
+        n_spokes: nSpokes,
+        nUpper
+      }), [d_ds_eff, d_nds_eff, activeBaseHub.pcd_ds, activeBaseHub.pcd_nds, erd, tDS, nSpokes, nUpper]);
 
-      const chartData = useMemo(() => {
-        return PRESETS.map(p => {
-          const d_ds = p.d_ds + rimOffsetMm;
-          const d_nds = p.d_nds - rimOffsetMm;
-          const res = calcWheel({ d_ds, d_nds, pcd_ds: p.pcd_ds, pcd_nds: p.pcd_nds, erd_mm: erd, t_ds: tDS, n_spokes: nSpokes });
-          return { ...p, d_ds_display: d_ds, d_nds_display: d_nds, ...res, isActive: !custom && p.id === presetId };
+      const chartData = useMemo(() => PRESETS.map(p => {
+        const d_ds = p.d_ds + rimOffsetMm;
+        const d_nds = p.d_nds - rimOffsetMm;
+        const res = calcWheel({
+          d_ds,
+          d_nds,
+          pcd_ds: p.pcd_ds,
+          pcd_nds: p.pcd_nds,
+          erd_mm: erd,
+          t_ds: tDS,
+          n_spokes: nSpokes,
+          nUpper
         });
-      }, [offsetRim, presetId, custom, erd, tDS, nSpokes, rimOffsetMm]);
+        return { ...p, d_ds_display: d_ds, d_nds_display: d_nds, ...res, isActive: !custom && p.id === presetId };
+      }), [offsetRim, presetId, custom, erd, tDS, nSpokes, rimOffsetMm, nUpper]);
 
-      const rc = symCol(m.symmetry_pct);
-      const BG = '#060d18'; const CARD = '#0b1826'; const BDR = '#1e3050'; const GRN = '#2d9b5a';
+      const rc = '#60a5fa';
+      const BG = '#060d18';
+      const CARD = '#0b1826';
+      const BDR = '#1e3050';
+      const GRN = '#2d9b5a';
 
       const tabBtn = (id, label) => (
         <button key={id} onClick={()=>setTab(id)} style={{
@@ -324,9 +324,15 @@
       return (
         <div style={{background:BG,minHeight:'100vh',fontFamily:'monospace',color:'#e2e8f0',fontSize:12}}>
           <div style={{background:'linear-gradient(180deg,#0b1e36,#060d18)',borderBottom:`1px solid ${BDR}`,padding:'18px 24px 14px'}}>
-            <div style={{fontSize:9,color:'#3b82f6',letterSpacing:4,textTransform:'uppercase',marginBottom:4}}>Chris King MTB Hubs · Wheel Engineering Analysis</div>
-            <h1 style={{fontSize:20,fontWeight:300,margin:'0 0 4px',letterSpacing:2,color:'#f1f5f9'}}>REAR HUB STANDARDS &amp; WHEEL STRENGTH</h1>
-            <p style={{margin:0,color:'#2d4a6a',fontSize:10}}>Interactive: adjust hub geometry, wheel size, tension &amp; spoke count · Live recalculation</p>
+            <div style={{fontSize:9,color:'#3b82f6',letterSpacing:4,textTransform:'uppercase',marginBottom:4}}>
+              Chris King MTB Hubs · Wheel Engineering Analysis
+            </div>
+            <h1 style={{fontSize:20,fontWeight:300,margin:'0 0 4px',letterSpacing:2,color:'#f1f5f9'}}>
+              REAR HUB STANDARDS &amp; WHEEL STRENGTH
+            </h1>
+            <p style={{margin:0,color:'#2d4a6a',fontSize:10}}>
+              Interactive: adjust hub geometry, wheel size, tension &amp; spoke count · Live recalculation
+            </p>
           </div>
 
           <div style={{background:'#080f1a',borderBottom:`1px solid ${BDR}`,padding:'14px 24px'}}>
@@ -335,43 +341,96 @@
                 <div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:6}}>WHEEL SIZE</div>
                 <div style={{display:'flex',gap:4}}>
                   {Object.entries(WHEEL_SIZES).map(([k]) => (
-                    <button key={k} onClick={()=>setWheelKey(k)} style={{ background: wheelKey===k ? '#1e3a8a' : '#0a1620', border: `1px solid ${wheelKey===k ? '#3b82f6' : BDR}`, color: wheelKey===k ? '#60a5fa' : '#2d4a6a', cursor:'pointer',padding:'4px 10px',fontFamily:'monospace',fontSize:9,borderRadius:2 }}>{k}</button>
+                    <button key={k} onClick={()=>setWheelKey(k)} style={{
+                      background: wheelKey===k ? '#1e3a8a' : '#0a1620',
+                      border: `1px solid ${wheelKey===k ? '#3b82f6' : BDR}`,
+                      color: wheelKey===k ? '#60a5fa' : '#2d4a6a',
+                      cursor:'pointer',padding:'4px 10px',fontFamily:'monospace',fontSize:9,borderRadius:2,
+                    }}>{k}</button>
                   ))}
                 </div>
               </div>
+
               <div>
                 <div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:6}}>SPOKES</div>
                 <div style={{display:'flex',gap:4}}>
                   {[28,32,36].map(n => (
-                    <button key={n} onClick={()=>setNSpokes(n)} style={{ background: nSpokes===n ? '#1e3a8a' : '#0a1620', border: `1px solid ${nSpokes===n ? '#3b82f6' : BDR}`, color: nSpokes===n ? '#60a5fa' : '#2d4a6a', cursor:'pointer',padding:'4px 10px',fontFamily:'monospace',fontSize:9,borderRadius:2 }}>{n}H</button>
+                    <button key={n} onClick={()=>setNSpokes(n)} style={{
+                      background: nSpokes===n ? '#1e3a8a' : '#0a1620',
+                      border: `1px solid ${nSpokes===n ? '#3b82f6' : BDR}`,
+                      color: nSpokes===n ? '#60a5fa' : '#2d4a6a',
+                      cursor:'pointer',padding:'4px 10px',fontFamily:'monospace',fontSize:9,borderRadius:2,
+                    }}>{n}H</button>
                   ))}
                 </div>
               </div>
+
               <div>
                 <div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:6}}>MODE</div>
                 <div style={{display:'flex',gap:4}}>
                   {[['preset','PRESET'],['custom','CUSTOM']].map(([k,l]) => (
-                    <button key={k} onClick={()=>setCustom(k==='custom')} style={{ background: (custom ? (k==='custom') : (k==='preset')) ? '#1e3a8a' : '#0a1620', border: `1px solid ${(custom ? (k==='custom') : (k==='preset')) ? '#3b82f6' : BDR}`, color: (custom ? (k==='custom') : (k==='preset')) ? '#60a5fa' : '#2d4a6a', cursor:'pointer',padding:'4px 10px',fontFamily:'monospace',fontSize:9,borderRadius:2 }}>{l}</button>
+                    <button key={k} onClick={()=>setCustom(k==='custom')} style={{
+                      background: (custom ? (k==='custom') : (k==='preset')) ? '#1e3a8a' : '#0a1620',
+                      border: `1px solid ${(custom ? (k==='custom') : (k==='preset')) ? '#3b82f6' : BDR}`,
+                      color: (custom ? (k==='custom') : (k==='preset')) ? '#60a5fa' : '#2d4a6a',
+                      cursor:'pointer',padding:'4px 10px',fontFamily:'monospace',fontSize:9,borderRadius:2,
+                    }}>{l}</button>
                   ))}
                 </div>
               </div>
+
               <div>
                 <div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:6}}>3MM OFFSET RIM</div>
-                <button onClick={() => setOffsetRim(!offsetRim)} style={{ background: offsetRim ? '#166534' : '#0a1620', border: `1px solid ${offsetRim ? '#22c55e' : BDR}`, color: offsetRim ? '#4ade80' : '#4a6a8a', cursor: 'pointer', padding: '6px 12px', fontFamily: 'monospace', fontSize: 9, borderRadius: 2, width: '100%', fontWeight: offsetRim ? 'bold' : 'normal' }}>
+                <button onClick={() => setOffsetRim(!offsetRim)} style={{
+                  background: offsetRim ? '#166534' : '#0a1620',
+                  border: `1px solid ${offsetRim ? '#22c55e' : BDR}`,
+                  color: offsetRim ? '#4ade80' : '#4a6a8a',
+                  cursor: 'pointer',
+                  padding: '6px 12px',
+                  fontFamily: 'monospace',
+                  fontSize: 9,
+                  borderRadius: 2,
+                  width: '100%',
+                  fontWeight: offsetRim ? 'bold' : 'normal',
+                  textAlign: 'center'
+                }}>
                   {offsetRim ? '✓ Enabled' : 'Disabled'}
                 </button>
               </div>
+
               <div>
                 <Slider label="DS Reference Tension" value={tDS} min={60} max={130} step={1} unit=" kgf" color="#fbbf24" onChange={setTDS}/>
               </div>
+
+              <div>
+                <Slider label="Mode Upper Limit (nUpper)" value={nUpper} min={6} max={40} step={1} unit="" color="#60a5fa" onChange={setNUpper}/>
+              </div>
+
               <div>
                 {!custom ? (
-                  <><div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:6}}>HUB PRESET</div><select value={presetId} onChange={e=>setPresetId(e.target.value)} style={{ background:'#0a1620',border:`1px solid ${BDR}`,color:'#60a5fa', fontFamily:'monospace',fontSize:9,padding:'5px 8px',width:'100%',cursor:'pointer' }}>{PRESETS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></>
+                  <>
+                    <div style={{fontSize:8,color:'#2d4a6a',letterSpacing:2,marginBottom:6}}>HUB PRESET</div>
+                    <select value={presetId} onChange={e=>setPresetId(e.target.value)} style={{
+                      background:'#0a1620',border:`1px solid ${BDR}`,color:'#60a5fa',
+                      fontFamily:'monospace',fontSize:9,padding:'5px 8px',width:'100%',cursor:'pointer',
+                    }}>
+                      {PRESETS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </>
                 ) : (
-                  <><Slider label="Center-to-DS Flange (d_DS)" value={dDS} min={5} max={65} color="#fbbf24" onChange={v=>{setDDS(v);setCustom(true);}}/><Slider label="DS Flange PCD" value={pcdDS} min={30} max={100} color="#fbbf24" onChange={setPcdDS}/></>
+                  <>
+                    <Slider label="Center-to-DS Flange (d_DS)" value={dDS} min={5} max={65} color="#fbbf24" onChange={v=>{setDDS(v);setCustom(true);}}/>
+                    <Slider label="DS Flange PCD" value={pcdDS} min={30} max={100} color="#fbbf24" onChange={setPcdDS}/>
+                  </>
                 )}
               </div>
-              {custom && (<div><Slider label="Center-to-NDS Flange (d_NDS)" value={dNDS} min={5} max={65} color="#60a5fa" onChange={v=>{setDNDS(v);setCustom(true);}}/><Slider label="NDS Flange PCD" value={pcdNDS} min={30} max={100} color="#60a5fa" onChange={setPcdNDS}/></div>)}
+
+              {custom && (
+                <div>
+                  <Slider label="Center-to-NDS Flange (d_NDS)" value={dNDS} min={5} max={65} color="#60a5fa" onChange={v=>{setDNDS(v);setCustom(true);}}/>
+                  <Slider label="NDS Flange PCD" value={pcdNDS} min={30} max={100} color="#60a5fa" onChange={setPcdNDS}/>
+                </div>
+              )}
             </div>
           </div>
 
@@ -387,8 +446,18 @@
                 <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))',gap:20,marginBottom:20}}>
                   <div style={{background:CARD,border:`1px solid ${BDR}`,borderRadius:3,padding:16}}>
                     <div style={{fontSize:9,color:'#3b82f6',letterSpacing:2,marginBottom:8}}>ACTIVE HUB — LIVE GEOMETRY</div>
-                    <div style={{fontFamily:'monospace',fontSize:11,color:'#5a80a0',marginBottom:12}}>{activeBaseHub.name} {offsetRim ? '(3mm Offset Active)' : ''}</div>
-                    <CrossSection hub_d_ds={activeBaseHub.d_ds} hub_d_nds={activeBaseHub.d_nds} pcd_ds={activeBaseHub.pcd_ds} pcd_nds={activeBaseHub.pcd_nds} OLD={activeBaseHub.OLD} width={380} rimOffsetMm={rimOffsetMm} />
+                    <div style={{fontFamily:'monospace',fontSize:11,color:'#5a80a0',marginBottom:12}}>
+                      {activeBaseHub.name} {offsetRim ? '(3mm Offset Active)' : ''}
+                    </div>
+                    <CrossSection
+                      hub_d_ds={activeBaseHub.d_ds}
+                      hub_d_nds={activeBaseHub.d_nds}
+                      pcd_ds={activeBaseHub.pcd_ds}
+                      pcd_nds={activeBaseHub.pcd_nds}
+                      OLD={activeBaseHub.OLD}
+                      width={380}
+                      rimOffsetMm={rimOffsetMm}
+                    />
                     <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginTop:14}}>
                       <MetricCard label="TENSION SYMMETRY" value={m.symmetry_pct} unit="%" color={rc}/>
                       <MetricCard label="FLANGE SPAN" value={m.ftf} unit="mm" color="#38bdf8"/>
@@ -401,24 +470,16 @@
                   </div>
 
                   <div style={{display:'flex',flexDirection:'column',gap:12}}>
-                    {wheelKey !== '29"' && (
-                      <div style={{background:'#0a1620',border:`1px solid #3b82f6`,borderRadius:3,padding:14}}>
-                        <div style={{fontSize:9,color:'#60a5fa',letterSpacing:2,marginBottom:8}}>WHEEL SIZE SCALING</div>
-                        <div style={{fontSize:10,color:'#e2e8f0',lineHeight:1.8}}>
-                          <strong>Why is a {wheelKey} wheel stronger?</strong><br/>
-                          This version uses a mode‑matrix‑style solve which correctly exposes how rim radius and spoke length interact. Smaller ERD concentrates the rim stiffness and shortens the spokes, making the 27.5 wheel clearly stiffer than the 29 inch wheel.
-                        </div>
+                    <div style={{background:CARD,border:`1px solid ${BDR}`,borderRadius:3,padding:14}}>
+                      <div style={{fontSize:9,color:GRN,letterSpacing:2,marginBottom:8}}>MODEL NOTES</div>
+                      <div style={{fontSize:10,color:'#2d4a6a',lineHeight:1.8}}>
+                        <div>Higher nUpper increases modal fidelity.</div>
+                        <div>Stiffness is matrix-inspired, not a direct proxy.</div>
+                        <div>Strength is minimum detension load.</div>
+                        <div>Offset changes geometry only.</div>
                       </div>
-                    )}
-                    {offsetRim && (
-                      <div style={{background:'#166534',border:`1px solid #22c55e`,borderRadius:3,padding:14}}>
-                        <div style={{fontSize:9,color:'#4ade80',letterSpacing:2,marginBottom:8}}>OFFSET GEOMETRY TUNING</div>
-                        <div style={{fontSize:10,color:'#e2e8f0',lineHeight:1.8}}>
-                          <strong>Effective DETENTION limit behavior.</strong><br/>
-                          Because only geometry changes, the offset now improves lateral detension more gradually: more symmetry and a steeper NDS angle, but not an “unearned” multi‑multiplier effect.
-                        </div>
-                      </div>
-                    )}
+                    </div>
+
                     <div style={{background:CARD,border:`1px solid ${BDR}`,borderRadius:3,padding:14}}>
                       <div style={{fontSize:9,color:'#2d4a6a',letterSpacing:2,marginBottom:8}}>TENSION BALANCE</div>
                       <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
@@ -440,36 +501,40 @@
                 <div style={{background:CARD,border:`1px solid ${BDR}`,padding:'14px 18px',borderRadius:3,marginBottom:16}}>
                   <div style={{fontSize:9,color:GRN,letterSpacing:2,marginBottom:10}}>ACTIVE GEOMETRY PERFORMANCE</div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))',gap:10}}>
-                    <MetricCard label="LATERAL STIFFNESS" value={m.K_lat} unit="N/mm" color="#38bdf8" sub="Mode‑matrix‑style lateral stiffness"/>
-                    <MetricCard label="RADIAL STIFFNESS" value={m.K_rad} unit="N/mm" color="#4ade80" sub="Mode‑matrix‑style radial stiffness"/>
-                    <MetricCard label="LATERAL DETENTION" value={m.F_lat_kgf} unit="kgf" color="#f59e0b" sub="Load to slack worst‑case spoke (lateral)"/>
-                    <MetricCard label="RADIAL DETENTION" value={m.F_rad_kgf} unit="kgf" color="#a78bfa" sub="Load to slack worst‑case spoke (radial)"/>
+                    <MetricCard label="LATERAL STIFFNESS" value={m.K_lat} unit="N/mm" color="#38bdf8" sub="Mode-based stiffness"/>
+                    <MetricCard label="RADIAL STIFFNESS" value={m.K_rad} unit="N/mm" color="#4ade80" sub="Mode-based stiffness"/>
+                    <MetricCard label="LATERAL DETENSION" value={m.F_lat_kgf} unit="kgf" color="#f59e0b" sub="Load to slack weakest spoke"/>
+                    <MetricCard label="RADIAL DETENSION" value={m.F_rad_kgf} unit="kgf" color="#a78bfa" sub="Load to slack weakest spoke"/>
                   </div>
                 </div>
 
                 <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(300px, 1fr))',gap:12}}>
                   <div style={{background:CARD,border:`1px solid ${BDR}`,padding:14,borderRadius:3}}>
-                    <div style={{fontSize:9,color:'#a78bfa',letterSpacing:2,marginBottom:10}}>RADIAL DETENTION LIMIT (kgf)</div>
+                    <div style={{fontSize:9,color:'#a78bfa',letterSpacing:2,marginBottom:10}}>RADIAL DETENSION LIMIT (kgf)</div>
                     <ResponsiveContainer width="100%" height={220}>
                       <BarChart data={chartData} margin={{top:10,right:10,bottom:40,left:0}}>
-                        <CartesianGrid strokeDasharray="3,3" stroke="#0d1826"/>
+                        <CartesianGrid strokeDasharray="3,3" stroke="#0d1e33"/>
                         <XAxis dataKey="short" tick={{fill:'#4a6a8a',fontSize:8}} angle={-30} textAnchor="end"/>
                         <YAxis tick={{fill:'#4a6a8a',fontSize:9}}/>
                         <Tooltip content={<ChartTip/>}/>
-                        <Bar dataKey="F_rad_kgf">{chartData.map((d,i)=><Cell key={i} fill={d.isActive ? '#a78bfa' : '#3d5a80'}/>)}</Bar>
+                        <Bar dataKey="F_rad_kgf">
+                          {chartData.map((d,i)=><Cell key={i} fill={d.isActive ? '#a78bfa' : '#3d5a80'}/>)}
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
 
                   <div style={{background:CARD,border:`1px solid ${BDR}`,padding:14,borderRadius:3}}>
-                    <div style={{fontSize:9,color:'#f59e0b',letterSpacing:2,marginBottom:10}}>LATERAL DETENTION LIMIT (kgf)</div>
+                    <div style={{fontSize:9,color:'#f59e0b',letterSpacing:2,marginBottom:10}}>LATERAL DETENSION LIMIT (kgf)</div>
                     <ResponsiveContainer width="100%" height={220}>
                       <BarChart data={chartData} margin={{top:10,right:10,bottom:40,left:0}}>
-                        <CartesianGrid strokeDasharray="3,3" stroke="#0d1826"/>
+                        <CartesianGrid strokeDasharray="3,3" stroke="#0d1e33"/>
                         <XAxis dataKey="short" tick={{fill:'#4a6a8a',fontSize:8}} angle={-30} textAnchor="end"/>
                         <YAxis tick={{fill:'#4a6a8a',fontSize:9}}/>
                         <Tooltip content={<ChartTip/>}/>
-                        <Bar dataKey="F_lat_kgf">{chartData.map((d,i)=><Cell key={i} fill={d.isActive ? '#f59e0b' : '#3d5a80'}/>)}</Bar>
+                        <Bar dataKey="F_lat_kgf">
+                          {chartData.map((d,i)=><Cell key={i} fill={d.isActive ? '#f59e0b' : '#3d5a80'}/>)}
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -487,8 +552,8 @@
                       <th style={{padding:6}}>Effective d_NDS</th>
                       <th style={{padding:6}}>Symmetry</th>
                       <th style={{padding:6}}>Lateral K (N/mm)</th>
-                      <th style={{padding:6}}>Lat Detention</th>
-                      <th style={{padding:6}}>Rad Detention</th>
+                      <th style={{padding:6}}>Lat Detension</th>
+                      <th style={{padding:6}}>Rad Detension</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -509,9 +574,9 @@
             )}
 
             <div style={{marginTop:40,borderTop:`1px solid #0d1826`,paddingTop:12,fontSize:8,color:'#3d5a80',lineHeight:2}}>
-              <strong>Math Model:</strong> Analytical approximation using a 1‑mode Rayleigh‑Ritz style solve, matching the structure of <code>bike‑wheel‑calc</code>. Stiffness comes from a matrix‑like lateral/radial solve; strength is the load required to slacken the weakest spoke.<br/>
-              <strong>Offset Convention:</strong> Rear‑wheel asymmetric rim shifts the rim bed toward the NDS by 3mm, so effective DS span increases (+3mm) and effective NDS span decreases (‑3mm).<br/>
-              <strong>Interpretation:</strong> The 3 mm offset now improves lateral strength more gradually, as would be expected from the repository’s math framework.
+              <strong>Math Model:</strong> Reduced modal approximation inspired by the bike-wheel-calc mode matrix structure. <br/>
+              <strong>Offset Convention:</strong> Rear-wheel asymmetric rim shifts the rim bed toward the NDS by 3mm, so effective DS span increases and effective NDS span decreases. <br/>
+              <strong>Interpretation:</strong> More Fourier modes should make geometry differences separate more realistically across hub standards.
             </div>
           </div>
         </div>
